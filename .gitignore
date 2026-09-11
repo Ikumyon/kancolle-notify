@@ -56,6 +56,10 @@ dist/
 *.dll
 *.so
 *.dylib
+# 配布用完成品バイナリは例外として許可
+!desktop/dist/
+!desktop/dist/kancolle-gui.exe
+!desktop/dist/kancolle-daemon.exe
 
 # --- 動的データ・実行時キャッシュ・個人設定 ---
 # 遠征・入渠・疲労回復などのリアルタイム稼働状態
