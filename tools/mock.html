@@ -1,0 +1,52 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>艦これ通知 模擬テスト環境</title>
+<style>
+  body { font: 15px/1.6 system-ui,sans-serif; color: #20334a; background: #eef3f7; padding: 20px; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 8px; }
+  h2 { font-size: 16px; margin-top: 20px; border-bottom: 2px solid #24667c; padding-bottom: 4px; }
+  .instructions { background: #fff; border: 1px solid #d6e0e9; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+  .panel { background: #fff; border: 1px solid #d6e0e9; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .btn-group { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  button { color: #fff; background: #24667c; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; font: inherit; font-size: 14px; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary { background: #596d81; }
+  pre { background: #f1f5f8; padding: 10px; border-radius: 6px; font-size: 12px; overflow-x: auto; max-height: 220px; }
+  #detection { font-weight: bold; }
+</style>
+<body>
+<h1>艦これ 疑似ゲームテスト環境</h1>
+<div class="instructions">
+  <p><strong>【テスト手順】</strong></p>
+  <ol>
+    <li>このタブで <strong>F12（DevTools）</strong> を開いてください（拡張機能がゲームAPIレスポンスを受動監視します）。</li>
+    <li>拡張機能のポップアップまたは設定画面で、接続先が <code>http://127.0.0.1:8787</code> になっていることを確認してください。</li>
+    <li>下のボタンを押して疑似ゲームAPIをブラウザ上で発生させ、ポップアップを開いて状態が反映されるか確認します。</li>
+  </ol>
+</div>
+
+<div class="panel">
+  <h2>疑似ゲームAPIの送信</h2>
+  <div class="btn-group">
+    <button id="btn-akashi" disabled>泊地修理（20分経過・1隻全回復）</button>
+    <button id="btn-start" disabled>① ゲーム起動 (api_start2)</button>
+    <button id="btn-port" disabled>② 母港帰投・疲労度・編成 (api_port/port)</button>
+    <button id="btn-deck" disabled>③ 遠征情報 (api_get_member/deck)</button>
+    <button id="btn-ndock" disabled>④ 入渠ドック (api_get_member/ndock)</button>
+    <button id="btn-kdock" disabled>⑤ 建造ドック (api_get_member/kdock)</button>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>リクエスト監視と検出</h2>
+  <p id="detection" role="status">検出を準備中…</p>
+  <p id="counts"></p>
+  <p class="muted">※拡張機能がゲームサーバーへ余分な通信を送信していないかを常時監視します。</p>
+  <pre id="requests">（リクエスト履歴）</pre>
+</div>
+
+<div class="panel">
+  <h2>直近の受信レスポンス</h2>
+  <pre id="output">（ボタンを押すとここにAPIレスポンスが表示されます）</pre>
+</div>
+
+<script src="/mock.js"></script>
+</body></html>

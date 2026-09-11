@@ -1,0 +1,63 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>通知の設定</title>
+<link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="ui.css">
+<body class="settings-page">
+<header class="settings-header">
+  <div class="settings-title-area">
+    <h1><i class="fa-solid fa-gear"></i> 通知の設定</h1>
+    <p class="muted">取得中はゲームタブのDevToolsを開いてください。同期後はゲームやPCを終了できます。</p>
+  </div>
+  <nav class="settings-nav">
+    <a class="button secondary" href="panel.html" target="_blank"><i class="fa-solid fa-clock-rotate-left"></i> 予約と履歴</a>
+  </nav>
+</header>
+
+<div class="settings-container">
+  <section class="settings-card">
+    <h2><i class="fa-solid fa-server"></i> 中央サービスへの接続</h2>
+    <div id="test-mode-box" class="test-mode-box">
+      <label class="checkbox-label"><input id="test-mode" type="checkbox"> <strong>テストモード（ローカル疑似環境に接続）</strong></label>
+      <p class="muted test-mode-note">ローカルの疑似サーバー（<code>http://127.0.0.1:8787</code>）へ固定接続します。本番URLやトークンは保持され、OFFにすると元に戻ります。</p>
+    </div>
+    <form id="settings">
+      <label>中央サービスURL<input id="url" type="url" required placeholder="https://kancolle-notify.example.workers.dev"></label>
+      <label>この端末の接続トークン<input id="token" type="password" required autocomplete="off" minlength="32"></label>
+      <div class="settings-action-row">
+        <button type="submit"><i class="fa-solid fa-floppy-disk"></i> 保存して接続</button>
+      </div>
+    </form>
+    <div class="connection-status-box" aria-live="polite">
+      <p id="saved-state">保存状態を確認中…</p>
+      <p id="connection-state">接続：未確認</p>
+    </div>
+    <p id="notice" role="status"></p>
+  </section>
+
+  <section class="settings-card">
+    <h2><i class="fa-solid fa-eye-slash"></i> 表示設定</h2>
+    <div class="setting-item">
+      <label class="checkbox-label"><input id="hide-build-name" type="checkbox"> <strong>建造中の艦名を隠す（ネタバレ防止）</strong></label>
+      <p class="muted setting-desc">ONにすると、ポップアップの建造ドックで艦名を表示せず「建造中」（完了時は「完成」）と表示します。</p>
+      <p id="display-notice" role="status" class="good"></p>
+    </div>
+  </section>
+
+  <section class="settings-card">
+    <h2><i class="fa-solid fa-battery-half"></i> 疲労回復の目標値</h2>
+    <form id="fatigue-settings">
+      <p class="muted setting-desc">ポップアップで選べる数字と既定値を、この端末で設定します。艦隊ごとに選択できます。</p>
+      <label>選択肢（0～100の整数をカンマで区切る・最大12件）<input id="fatigue-presets" autocomplete="off"></label>
+      <label>既定値<select id="fatigue-default"><option value="">未設定</option></select></label>
+      <p class="muted setting-desc">数値が大きいほど疲労が少ない状態です。設定できる数値と、時間経過で回復できる上限は異なります。</p>
+      <div class="settings-action-row">
+        <button type="submit"><i class="fa-solid fa-floppy-disk"></i> 目標値を保存</button>
+      </div>
+      <p id="fatigue-notice" role="status"></p>
+    </form>
+  </section>
+</div>
+
+<footer class="settings-footer">
+  <p class="muted">TelegramのBotトークンは中央側で設定します。表示は日本時間、履歴は30日保存します。</p>
+</footer>
+<script type="module" src="settings.js"></script><script type="module" src="fatigue-settings.js"></script></body></html>

@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "艦これ 終了予定通知",
+  "version": "0.4.0",
+  "description": "受信済みの終了予定と疲労回復見込みを中央へ送り、手動予約と合わせて表示します。",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://*.workers.dev/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "devtools_page": "devtools.html",
+  "options_page": "settings.html",
+  "action": {
+    "default_title": "艦これ 終了予定通知",
+    "default_popup": "popup.html"
+  }
+}

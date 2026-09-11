@@ -1,0 +1,53 @@
+# ==============================================================================
+# Git 無視リスト (.gitignore) - kancolle-notify
+# ==============================================================================
+
+# --- Node.js / JavaScript ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Cloudflare Workers ---
+.wrangler/
+.dev.vars
+.dev.vars.*
+wrangler.jsonc
+
+# --- Rust (常駐デーモン) ---
+**/target/
+**/*.rs.bk
+
+# --- Python (GUI) ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# --- 仮想環境 (Python Virtual Environments) ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- 動的データ・実行時キャッシュ・個人設定 ---
+# 遠征・入渠・疲労回復などのリアルタイム稼働状態
+state.json
+**/state.json
+
+# トークンや個人サーバーURLが含まれる設定ファイル
+config.json
+**/config.json
+
+# --- ローカル検証・テスト用一時ファイル ---
+.local/
+*.log
+
+# --- OS / エディタ固有ファイル ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

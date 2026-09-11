@@ -1,0 +1,91 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><title>終了予定通知</title>
+<link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="ui.css">
+<body class="popup">
+<header class="popup-header">
+  <div class="popup-title-bar">
+    <h1>艦これ 終了予定通知 <span id="mode-badge" class="badge-test" hidden>テストモード</span></h1>
+    <p id="notice" role="status">確認中…</p>
+  </div>
+  <div class="popup-controls">
+    <nav class="popup-nav">
+      <button id="refresh"><i class="fa-solid fa-rotate-right"></i> 更新</button>
+      <a class="button" href="panel.html" target="_blank"><i class="fa-solid fa-clock-rotate-left"></i> 予約と履歴</a>
+      <a class="button" href="settings.html" target="_blank"><i class="fa-solid fa-gear"></i> 設定</a>
+    </nav>
+    <div id="time-mode" class="segments" role="group" aria-label="予定時刻の表示">
+      <button type="button" data-mode="remaining" aria-pressed="false"><i class="fa-solid fa-hourglass-half"></i> あと何分</button>
+      <button type="button" data-mode="absolute" aria-pressed="true"><i class="fa-regular fa-clock"></i> 何時に</button>
+    </div>
+  </div>
+</header>
+<section class="fleet-section">
+  <h2><i class="fa-solid fa-ship"></i> 艦隊状況</h2>
+  <div id="fleet-grid" class="fleet-grid">
+    <article class="fleet-card" id="fleet-card-1"><h3 class="fleet-title">第1艦隊</h3>
+      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-1" class="cond-badge cond-none">—</span></div>
+      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-1" class="segments" role="group" aria-label="第1艦隊の目標疲労度"></div><p id="fleet-fatigue-time-1" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-1" class="fleet-status-text muted" hidden></p></div>
+    </article>
+    <article class="fleet-card" id="fleet-card-2"><h3 class="fleet-title">第2艦隊</h3>
+      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-2" class="cond-badge cond-none">—</span></div>
+      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-2" class="segments" role="group" aria-label="第2艦隊の目標疲労度"></div><p id="fleet-fatigue-time-2" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-2" class="fleet-status-text muted" hidden></p></div>
+      <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-2" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-2" class="deadline expedition-none">--:--</p></div></div>
+    </article>
+    <article class="fleet-card" id="fleet-card-3"><h3 class="fleet-title">第3艦隊</h3>
+      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-3" class="cond-badge cond-none">—</span></div>
+      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-3" class="segments" role="group" aria-label="第3艦隊の目標疲労度"></div><p id="fleet-fatigue-time-3" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-3" class="fleet-status-text muted" hidden></p></div>
+      <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-3" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-3" class="deadline expedition-none">--:--</p></div></div>
+    </article>
+    <article class="fleet-card" id="fleet-card-4"><h3 class="fleet-title">第4艦隊</h3>
+      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-4" class="cond-badge cond-none">—</span></div>
+      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-4" class="segments" role="group" aria-label="第4艦隊の目標疲労度"></div><p id="fleet-fatigue-time-4" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-4" class="fleet-status-text muted" hidden></p></div>
+      <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-4" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-4" class="deadline expedition-none">--:--</p></div></div>
+    </article>
+  </div>
+</section>
+<section class="akashi-section">
+  <h2><svg class="crane-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M10 29V3h4v26M3 29h18M4 8h25L12 3 4 8Zm9 1 8 8h-8m0 0 8 8h-8M27 9v10m0 0v3a3 3 0 1 1-6 0"/></svg> 泊地修理</h2>
+  <div id="akashi-fleets" class="akashi-fleets">母港の情報待ち</div>
+</section>
+<div class="popup-bottom-grid">
+  <section class="dock-section">
+    <h2><i class="fa-solid fa-wrench"></i> 入渠・建造</h2>
+    <div id="dock-reservations">
+      <h3 class="dock-group-title"><i class="fa-solid fa-toolbox"></i> 入渠</h3>
+      <div class="dock-grid">
+        <article class="dock-card" id="repair-card-1"><div class="dock-title">第1ドック</div><p id="repair-name-1" class="dock-name muted">—</p><p id="repair-time-1" class="deadline expedition-none">--:--</p></article>
+        <article class="dock-card" id="repair-card-2"><div class="dock-title">第2ドック</div><p id="repair-name-2" class="dock-name muted">—</p><p id="repair-time-2" class="deadline expedition-none">--:--</p></article>
+        <article class="dock-card" id="repair-card-3"><div class="dock-title">第3ドック</div><p id="repair-name-3" class="dock-name muted">—</p><p id="repair-time-3" class="deadline expedition-none">--:--</p></article>
+        <article class="dock-card" id="repair-card-4"><div class="dock-title">第4ドック</div><p id="repair-name-4" class="dock-name muted">—</p><p id="repair-time-4" class="deadline expedition-none">--:--</p></article>
+      </div>
+      <h3 class="dock-group-title"><i class="fa-solid fa-hammer"></i> 建造</h3>
+      <div class="dock-grid">
+        <article class="dock-card" id="build-card-1"><div class="dock-title">第1ドック</div><p id="build-name-1" class="dock-name muted">—</p><p id="build-time-1" class="deadline expedition-none">--:--</p></article>
+        <article class="dock-card" id="build-card-2"><div class="dock-title">第2ドック</div><p id="build-name-2" class="dock-name muted">—</p><p id="build-time-2" class="deadline expedition-none">--:--</p></article>
+        <article class="dock-card" id="build-card-3"><div class="dock-title">第3ドック</div><p id="build-name-3" class="dock-name muted">—</p><p id="build-time-3" class="deadline expedition-none">--:--</p></article>
+        <article class="dock-card" id="build-card-4"><div class="dock-title">第4ドック</div><p id="build-name-4" class="dock-name muted">—</p><p id="build-time-4" class="deadline expedition-none">--:--</p></article>
+      </div>
+    </div>
+  </section>
+  <section class="manual-section">
+    <h2><i class="fa-solid fa-bell"></i> 手動通知</h2>
+    <form id="manual-form">
+      <div class="manual-row">
+        <input id="manual-title" maxlength="80" required placeholder="通知名（例：30分後）">
+      </div>
+      <div class="manual-row">
+        <select id="manual-mode"><option value="minutes">何分後</option><option value="datetime">日時指定</option></select>
+      </div>
+      <div class="manual-row" id="minutes-field">
+        <input id="manual-minutes" type="number" min="1" max="525600" value="30" required placeholder="分">
+      </div>
+      <div class="manual-row" id="datetime-field" hidden>
+        <input id="manual-datetime" type="datetime-local">
+      </div>
+      <button id="manual-submit" type="submit"><i class="fa-solid fa-plus"></i> 予約する</button>
+    </form>
+    <p id="manual-notice" role="status"></p><button id="manual-retry" hidden>確認・再送</button>
+    <div id="manual-reservations"></div>
+  </section>
+</div>
+<script type="module" src="ui.js"></script></body></html>

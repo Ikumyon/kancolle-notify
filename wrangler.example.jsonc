@@ -1,0 +1,8 @@
+{
+  "name": "kancolle-notify",
+  "main": "server/worker.js",
+  "compatibility_date": "2026-09-09",
+  "triggers": { "crons": ["* * * * *"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "kancolle-notify", "database_id": "REPLACE_WITH_D1_ID" }],
+  "observability": { "enabled": false }
+}
