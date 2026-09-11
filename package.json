@@ -7,7 +7,8 @@
   "scripts": {
     "test": "node --experimental-vm-modules --test tests/*.test.js",
     "dev": "node tools/dev-server.js",
-    "check": "node tools/check.js"
+    "check": "node tools/check.js",
+    "bundle:worker": "npx esbuild server/worker.js --bundle --format=esm --target=es2022 --outfile=tools/installer/bundled-worker.js"
   },
   "engines": {
     "node": ">=22.13"

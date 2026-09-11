@@ -48,3 +48,26 @@ test('explicit reset creates a new UUID and removes all old reservations',async(
     assert.notEqual(fresh.epoch,old);assert.deepEqual(fresh.slots,{});assert.equal(fresh.generation,'0');
   }finally{env.DB.close();}
 });
+test('Discord webhook dispatch notifies successfully and sends text in content field',async()=>{
+  const env={DB:new LocalD1(),DEVICE_TOKENS:JSON.stringify({win:createHash('sha256').update(token).digest('hex')}),DISCORD_WEBHOOK_URL:'https://discord.example.com/api/webhooks/mock'};
+  try {
+    await seed(env);
+    let captured=null;
+    const send=async(url,init)=>{captured={url,body:JSON.parse(init.body)};return new Response(null,{status:204});};
+    await dispatch(env,{send});
+    assert.equal(captured.url,env.DISCORD_WEBHOOK_URL);
+    assert.match(captured.body.content,/遠征 第2艦隊/);
+    assert.ok((await new Repository(env.DB).history()).some(e=>e.type==='sent'));
+  }finally{env.DB.close();}
+});
+test('Discord webhook 404 blocks and explicit resume permits retry',async()=>{
+  const env={DB:new LocalD1(),DEVICE_TOKENS:JSON.stringify({win:createHash('sha256').update(token).digest('hex')}),DISCORD_WEBHOOK_URL:'https://discord.example.com/api/webhooks/bad'};
+  try {
+    await seed(env);
+    await dispatch(env,{send:async()=>new Response('Not Found',{status:404})});
+    assert.equal((await new Repository(env.DB).read()).state.authBlocked,true);
+    const r=await (await worker.fetch(req('/v2/resume',{}),env)).json();
+    assert.equal(r.state.authBlocked,false);
+  }finally{env.DB.close();}
+});
+

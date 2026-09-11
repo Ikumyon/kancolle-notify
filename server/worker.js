@@ -66,6 +66,37 @@ export async function handle(request, env) {
   }
   return json({ error: 'not_found' }, 404);
 }
+async function sendTelegram(token, chatId, text, send) {
+  try {
+    const response = await send(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const b = await response.json();
+    return response.ok && b.ok ? { ok: true, messageId: b.result?.message_id }
+      : { ok: false, code: `telegram_${Number(b.error_code || response.status)}`,
+        permanent: [400, 401, 403, 404].includes(Number(b.error_code || response.status)),
+        retryAfter: Math.max(0, Number(b.parameters?.retry_after) || 0) * 1000 };
+  } catch { return { ok: false, code: 'transport', uncertain: true }; }
+}
+async function sendDiscord(webhookUrl, text, send) {
+  try {
+    const response = await send(webhookUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (response.status === 204 || response.status === 200) return { ok: true };
+    const status = Number(response.status);
+    const retryAfter = Number(response.headers?.get?.('Retry-After')) || 0;
+    return {
+      ok: false, code: `discord_${status}`,
+      permanent: [400, 401, 403, 404].includes(status),
+      retryAfter: Math.max(0, retryAfter) * 1000
+    };
+  } catch { return { ok: false, code: 'transport', uncertain: true }; }
+}
 export async function dispatch(env, { now = () => Date.now(), send = fetch } = {}) {
   const repo = new Repository(env.DB), token = crypto.randomUUID();
   await repo.prune(now());
@@ -81,20 +112,24 @@ export async function dispatch(env, { now = () => Date.now(), send = fetch } = {
     return structuredClone(s.delivery);
   });
   if (!checked) return;
+  const hasTelegram = Boolean(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID);
+  const hasDiscord = Boolean(env.DISCORD_WEBHOOK_URL);
   let result;
-  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) result = { ok: false, permanent: true, code: 'telegram_not_configured' };
-  else try {
-    const response = await send(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: formatDelivery(checked) }),
-      signal: AbortSignal.timeout(15000)
-    });
-    const b = await response.json();
-    result = response.ok && b.ok ? { ok: true, messageId: b.result?.message_id }
-      : { ok: false, code: `telegram_${Number(b.error_code || response.status)}`,
-        permanent: [400, 401, 403, 404].includes(Number(b.error_code || response.status)),
-        retryAfter: Math.max(0, Number(b.parameters?.retry_after) || 0) * 1000 };
-  } catch { result = { ok: false, code: 'transport', uncertain: true }; }
+  if (!hasTelegram && !hasDiscord) {
+    result = { ok: false, permanent: true, code: 'notification_not_configured' };
+  } else {
+    const text = formatDelivery(checked);
+    const tasks = [];
+    if (hasTelegram) tasks.push(sendTelegram(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_ID, text, send));
+    if (hasDiscord) tasks.push(sendDiscord(env.DISCORD_WEBHOOK_URL, text, send));
+    const results = await Promise.all(tasks);
+    const success = results.find(r => r.ok);
+    if (success) {
+      result = success;
+    } else {
+      result = results.find(r => r.permanent) || results[0];
+    }
+  }
   await repo.mutate(s => finishDelivery(s, token, now(), result));
   console.info('dispatch_result', result.ok ? 'sent' : result.code);
 }

@@ -11,7 +11,8 @@ ctrlc = "3.5.2"
 
 [target.'cfg(windows)'.dependencies]
 winrt-notification = "0.5.1"
-windows-sys = { version = "0.52.0", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.52.0", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4"
+libc = "0.2"

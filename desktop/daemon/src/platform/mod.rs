@@ -22,7 +22,7 @@ pub fn test_notification() -> Result<(), String> {
     imp::test_notification()
 }
 
-pub fn is_process_running(pid: u32) -> bool {
+pub fn is_process_running(pid: u32) -> Result<bool, String> {
     imp::is_process_running(pid)
 }
 
@@ -32,4 +32,16 @@ pub fn stop_process(pid: u32) -> Result<(), String> {
 
 pub fn start_daemon_detached() -> Result<u32, String> {
     imp::start_daemon_detached()
+}
+
+pub fn enable_autostart() -> Result<(), String> {
+    imp::enable_autostart()
+}
+
+pub fn disable_autostart() -> Result<(), String> {
+    imp::disable_autostart()
+}
+
+pub fn is_autostart_enabled() -> Result<bool, String> {
+    imp::is_autostart_enabled()
 }

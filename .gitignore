@@ -7,16 +7,32 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
 
 # --- Cloudflare Workers ---
 .wrangler/
 .dev.vars
 .dev.vars.*
 wrangler.jsonc
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# --- インストーラー成果物 (Inno Setup / Build) ---
+dist-installer/
+**/dist-installer/
+Output/
+**/Output/
+_isetup/
+tools/installer/output/
+tools/installer/bundled-worker.js
 
 # --- Rust (常駐デーモン) ---
 **/target/
 **/*.rs.bk
+*.pdb
 
 # --- Python (GUI) ---
 __pycache__/
@@ -31,10 +47,24 @@ venv/
 ENV/
 env/
 
+# --- ビルド成果物・バイナリ (PyInstaller / Cargo) ---
+build/
+**/build/
+dist/
+**/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
 # --- 動的データ・実行時キャッシュ・個人設定 ---
 # 遠征・入渠・疲労回復などのリアルタイム稼働状態
 state.json
 **/state.json
+
+# プロセスID管理ファイル
+daemon.pid
+**/daemon.pid
 
 # トークンや個人サーバーURLが含まれる設定ファイル
 config.json
@@ -47,7 +77,9 @@ config.json
 # --- OS / エディタ固有ファイル ---
 .DS_Store
 Thumbs.db
-desktop.ini
+ehthumbs.db
+[Dd]esktop.ini
 .vscode/
 .idea/
 *.swp
+*~

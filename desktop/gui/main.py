@@ -1,8 +1,44 @@
+import math
 import sys
+import json
 import os
 import time
 from datetime import datetime
 from pathlib import Path
+
+def calculate_akashi_progress(ship: dict, start: int, now: int) -> dict:
+    """KC3準拠の明石修理（泊地修理）進捗計算"""
+    hp = ship.get("hp", 0)
+    max_hp = ship.get("max", hp)
+    missing = max(1, max_hp - hp)
+    repair = ship.get("repair", 0)
+    mod = ship.get("mod", 1.0)
+
+    base_repair = max(0, repair - 30000) * mod
+    minute = math.ceil(base_repair / 60000.0) * 60000.0
+    tick = math.ceil(minute / missing)
+
+    min_repair = 1200000
+    missing_num = max_hp - hp
+    if missing_num == 1:
+        end = start + min_repair
+    else:
+        end = start + max(min_repair, math.ceil(tick * missing_num / 60000.0) * 60000)
+
+    elapsed = max(0, now - start)
+    if elapsed < min_repair:
+        healed = 0
+    else:
+        minutes_ms = (elapsed // 60000) * 60000
+        count = math.floor(minutes_ms / tick) if tick > 0 else 0
+        healed = min(missing_num, max(1, count))
+
+    return {
+        "hp": min(max_hp, hp + healed),
+        "healed": healed,
+        "end": int(end),
+        "is_full": (hp + healed >= max_hp)
+    }
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPalette
@@ -104,11 +140,17 @@ class SettingsDialog(QDialog):
         self.sound_check.setChecked(self.cfg.get("play_sound", True))
         self.sound_check.setStyleSheet("color: #e0e6ed;")
 
+        os_label = "Windows" if sys.platform == "win32" else "OS"
+        self.autostart_check = QCheckBox(f"{os_label}起動時に自動起動する (常駐)")
+        self.autostart_check.setChecked(self.controller.get_autostart())
+        self.autostart_check.setStyleSheet("color: #e0e6ed;")
+
         form.addRow("Workers サーバーURL:", self.url_edit)
         form.addRow("端末認証トークン (Token):", self.token_edit)
         form.addRow("ステータス確認間隔:", self.interval_spin)
         form.addRow("事前通知タイミング:", self.advance_spin)
         form.addRow("", self.sound_check)
+        form.addRow("", self.autostart_check)
 
         layout.addLayout(form)
 
@@ -133,6 +175,14 @@ class SettingsDialog(QDialog):
         self.cfg["notify_advance_sec"] = self.advance_spin.value()
         self.cfg["play_sound"] = self.sound_check.isChecked()
 
+        # 自動起動の変更を反映
+        curr_autostart = self.controller.get_autostart()
+        target_autostart = self.autostart_check.isChecked()
+        if curr_autostart != target_autostart:
+            ok, msg = self.controller.set_autostart(target_autostart)
+            if not ok:
+                QMessageBox.warning(self, "自動起動設定警告", f"自動起動の設定に失敗しました:\n{msg}")
+
         if self.controller.save_config(self.cfg):
             self.accept()
         else:
@@ -146,6 +196,8 @@ class TimetableWindow(QWidget):
         super().__init__()
         self.controller = DaemonController(base_dir)
         self.cached_slots = {}
+        self._status_generation = 0
+        self._active_action = None
         self.init_ui()
 
         # 毎秒カウントダウン＆時計更新用タイマー
@@ -341,7 +393,40 @@ class TimetableWindow(QWidget):
 
     def refresh_daemon_status(self):
         """デーモン状態とスロット情報の再取得"""
-        status = self.controller.get_status()
+        if self._active_action is not None:
+            return
+        if not self.controller.is_installed():
+            self.status_label.setText(f"▲ 常駐デーモン未検出 ({self.controller.exe_name})")
+            self.status_label.setStyleSheet("background-color: #422006; color: #fbbf24;")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.cached_slots = {}
+            self.rebuild_table()
+            return
+
+        generation = self._status_generation
+        def completed(ok, output):
+            if generation != self._status_generation:
+                self.refresh_daemon_status()
+                return
+            self.apply_daemon_status(ok, output)
+        self.controller.run_command("status", completed)
+
+    def apply_daemon_status(self, ok, output):
+        try:
+            if not ok:
+                raise ValueError(output)
+            status = json.loads(output)
+            if not isinstance(status, dict) or not isinstance(status.get("slots", {}), dict):
+                raise ValueError("不正なステータス応答")
+        except (ValueError, TypeError) as error:
+            self.status_label.setText("▲ 状態取得失敗")
+            self.status_label.setToolTip(str(error))
+            self.status_label.setStyleSheet("background-color: #422006; color: #fbbf24;")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(True)
+            return
+        self.status_label.setToolTip("")
         is_running = status.get("is_running", False)
         pid = status.get("pid")
 
@@ -372,17 +457,35 @@ class TimetableWindow(QWidget):
             self.cached_slots.keys(),
             key=lambda k: (
                 kind_order.get(self.cached_slots[k].get("kind", ""), 99),
-                self.cached_slots[k].get("slot", 0)
+                self.cached_slots[k].get("slot") or 0
             )
         )
 
         for row, key in enumerate(sorted_keys):
             item = self.cached_slots[key]
             kind = item.get("kind", "")
-            slot_num = item.get("slot", 0)
+            slot_num = item.get("slot") or 0
             name = item.get("name") or "—"
             end_ms = item.get("end")
             state_str = item.get("state", "empty")
+
+            # 泊地修理（明石修理）の詳細表示
+            if kind == "akashi" and state_str == "active" and item.get("repair"):
+                repair_data = item["repair"]
+                start_ms = repair_data.get("start", 0)
+                ships = repair_data.get("ships", [])
+                now_ms = time.time() * 1000
+
+                ship_parts = []
+                latest_end = start_ms + 1200000
+                for s in ships:
+                    p = calculate_akashi_progress(s, start_ms, int(now_ms))
+                    status_lbl = "全快" if p["is_full"] else f"残{max(0, math.ceil((p['end'] - now_ms) / 60000))}分"
+                    ship_parts.append(f"{s.get('name')}: {s.get('hp')}→{p['hp']} (+{p['healed']}) {status_lbl}")
+                    if p["end"] > latest_end:
+                        latest_end = p["end"]
+                name = " / ".join(ship_parts) if ship_parts else (name or "修理中")
+                end_ms = latest_end if now_ms >= start_ms + 1200000 else (start_ms + 1200000)
 
             self.table.insertRow(row)
 
@@ -454,18 +557,86 @@ class TimetableWindow(QWidget):
                     {"expedition": 1, "repair": 2, "fatigue": 3, "build": 4, "akashi": 5, "manual": 6}.get(
                         self.cached_slots[k].get("kind", ""), 99
                     ),
-                    self.cached_slots[k].get("slot", 0)
+                    self.cached_slots[k].get("slot") or 0
                 )
             )
             if row >= len(keys):
                 continue
 
             item = self.cached_slots[keys[row]]
+            kind = item.get("kind", "")
             end_ms = item.get("end")
             state_str = item.get("state", "empty")
 
             rem_item = self.table.item(row, 4)
             status_item = self.table.item(row, 5)
+
+            # --- 泊地修理（明石修理）の動的更新 ---
+            if kind == "akashi" and state_str == "active" and item.get("repair"):
+                repair_data = item["repair"]
+                start_ms = repair_data.get("start", 0)
+                ships = repair_data.get("ships", [])
+                min_repair_due = start_ms + 1200000
+
+                # 艦娘一覧表示と全回復判定の更新
+                ship_parts = []
+                latest_end = min_repair_due
+                all_full = True
+                for s in ships:
+                    p = calculate_akashi_progress(s, start_ms, int(now_ms))
+                    if not p["is_full"]:
+                        all_full = False
+                    status_lbl = "全快" if p["is_full"] else f"残{max(0, math.ceil((p['end'] - now_ms) / 60000))}分"
+                    ship_parts.append(f"{s.get('name')}: {s.get('hp')}→{p['hp']} (+{p['healed']}) {status_lbl}")
+                    if p["end"] > latest_end:
+                        latest_end = p["end"]
+
+                # 行先/対象カラムを最新HPで更新
+                name_item = self.table.item(row, 2)
+                if name_item and ship_parts:
+                    name_item.setText(" / ".join(ship_parts))
+
+                due_item = self.table.item(row, 3)
+
+                if now_ms < min_repair_due:
+                    # 20分到達前
+                    if due_item:
+                        due_dt = datetime.fromtimestamp(min_repair_due / 1000.0)
+                        due_item.setText(due_dt.strftime("%H:%M:%S"))
+                    diff_sec = int((min_repair_due - now_ms) / 1000)
+                    minutes = diff_sec // 60
+                    seconds = diff_sec % 60
+                    if rem_item:
+                        rem_item.setText(f"{minutes:02d}:{seconds:02d}")
+                        rem_item.setForeground(QColor("#fbbf24"))
+                    if status_item:
+                        status_item.setText("20分待機")
+                        status_item.setForeground(QColor("#c084fc"))
+                else:
+                    # 20分経過後
+                    if due_item:
+                        due_dt = datetime.fromtimestamp(latest_end / 1000.0)
+                        due_item.setText(due_dt.strftime("%H:%M:%S"))
+                    diff_sec = int((latest_end - now_ms) / 1000)
+                    if all_full or diff_sec <= 0:
+                        if rem_item:
+                            rem_item.setText("00:00:00")
+                            rem_item.setForeground(QColor("#4ade80"))
+                        if status_item:
+                            status_item.setText("★ 全回復")
+                            status_item.setForeground(QColor("#4ade80"))
+                    else:
+                        hours = diff_sec // 3600
+                        minutes = (diff_sec % 3600) // 60
+                        seconds = diff_sec % 60
+                        time_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours > 0 else f"{minutes:02d}:{seconds:02d}"
+                        if rem_item:
+                            rem_item.setText(time_text)
+                            rem_item.setForeground(QColor("#e2e8f0"))
+                        if status_item:
+                            status_item.setText("修理中")
+                            status_item.setForeground(QColor("#c084fc"))
+                continue
 
             if state_str == "empty":
                 if rem_item: rem_item.setText("—")
@@ -531,6 +702,10 @@ class TimetableWindow(QWidget):
             return f"第 {slot} 艦隊"
         elif kind == "akashi":
             return "工作艦 明石"
+        elif kind == "manual":
+            return "手動タイマー"
+        if not slot:
+            return "—"
         return f"スロット {slot}"
 
     def get_state_display(self, kind: str) -> tuple[str, str]:
@@ -544,31 +719,37 @@ class TimetableWindow(QWidget):
         return states.get(kind, ("進行中", "#94a3b8"))
 
     def start_daemon(self):
-        ok, msg = self.controller.start()
-        if ok:
-            QTimer.singleShot(800, self.refresh_daemon_status)
-        else:
-            QMessageBox.warning(self, "起動失敗", f"デーモンの起動に失敗しました:\n{msg}")
+        self.run_action("start", "起動失敗")
 
     def stop_daemon(self):
-        ok, msg = self.controller.stop()
-        if ok:
-            QTimer.singleShot(500, self.refresh_daemon_status)
-        else:
-            QMessageBox.warning(self, "停止失敗", f"デーモンの停止に失敗しました:\n{msg}")
+        self.run_action("stop", "停止失敗")
 
     def test_notification(self):
-        import subprocess
-        try:
-            subprocess.run(
-                [str(self.controller.exe_path), "test"],
-                cwd=str(self.controller.base_dir),
-                capture_output=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-                timeout=5
-            )
-        except Exception as e:
-            QMessageBox.warning(self, "通知テスト失敗", str(e))
+        self.run_action("test", "通知テスト失敗")
+
+    def run_action(self, command, title):
+        if self._active_action is not None:
+            return
+        self._active_action = command
+        self._status_generation += 1
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
+        self.test_btn.setEnabled(False)
+        self.status_label.setText({"start": "◌ 起動中…", "stop": "◌ 停止中…", "test": "◌ 通知テスト中…"}[command])
+
+        def completed(ok, message):
+            self._active_action = None
+            self.test_btn.setEnabled(True)
+            if not ok:
+                QMessageBox.warning(self, title, message or "コマンドが失敗しました。")
+            self.refresh_daemon_status()
+        self.controller.run_command(command, completed)
+
+    def closeEvent(self, event):
+        self.timer.stop()
+        self.daemon_poll_timer.stop()
+        self.controller.shutdown()
+        super().closeEvent(event)
 
     def open_settings(self):
         dlg = SettingsDialog(self.controller, self)
@@ -576,12 +757,34 @@ class TimetableWindow(QWidget):
             self.refresh_daemon_status()
 
 
+def get_base_dir() -> Path:
+    """実行環境に応じたベースディレクトリを取得（exe化時は自身の隣、スクリプト時はdesktop/）"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
 def main():
+    # Windowsでタスクバーに個別アプリアイコンを表示させるためのID設定
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("kancolle.notify.timetable")
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # desktop/ ディレクトリをベースパスとする
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = get_base_dir()
+
+    # Windows & Linux 両対応のアイコン設定 (.ico / .png のある方を採用)
+    for icon_name in ["icon.ico", "icon.png"]:
+        icon_file = base_dir / icon_name
+        if icon_file.exists():
+            app.setWindowIcon(QIcon(str(icon_file)))
+            break
+
     window = TimetableWindow(base_dir)
     window.show()
 

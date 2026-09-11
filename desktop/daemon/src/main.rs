@@ -9,8 +9,8 @@ use config::load_config;
 use process::{read_pid, remove_pid, start_daemon_detached, stop_daemon, write_pid};
 use state::{load_state, save_state};
 use std::env;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use timer::check_and_notify;
@@ -22,12 +22,14 @@ fn print_usage() {
     println!("  kancolle-daemon.exe <COMMAND>");
     println!();
     println!("コマンド:");
-    println!("  run       フォアグラウンドで常駐実行（ログをコンソール出力）");
-    println!("  start     バックグラウンドで常駐開始（不可視プロセス）");
-    println!("  stop      バックグラウンドの常駐プロセスを安全に停止");
-    println!("  status    現在の常駐状態と監視スロットをJSONで出力");
-    println!("  test      デスクトップ通知の動作テストを実行");
-    println!("  help      このヘルプを表示");
+    println!("  run                     フォアグラウンドで常駐実行（ログをコンソール出力）");
+    println!("  start                   バックグラウンドで常駐開始（不可視プロセス）");
+    println!("  stop                    バックグラウンドの常駐プロセスを安全に停止");
+    println!("  status                  現在の常駐状態と監視スロットをJSONで出力");
+    println!("  test                    デスクトップ通知の動作テストを実行");
+    println!("  autostart [CMD]         PC起動時の自動起動を管理 (status | enable | disable)");
+    println!("  config [CMD]            設定の一覧表示および変更 (list | set <key> <val> | --json)");
+    println!("  help                    このヘルプを表示");
 }
 
 fn run_loop() {
@@ -82,12 +84,123 @@ fn run_loop() {
 
 fn cmd_status() {
     let mut state = load_state();
-    let current_pid = read_pid();
+    let current_pid = read_pid().unwrap_or_else(|e| {
+        eprintln!("[ERROR] {}", e);
+        std::process::exit(1);
+    });
     state.is_running = current_pid.is_some();
     state.pid = current_pid;
 
     let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
     println!("{}", json);
+}
+
+fn cmd_autostart(args: &[String]) {
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("status");
+    match sub {
+        "enable" | "on" => match platform::enable_autostart() {
+            Ok(_) => println!("[SUCCESS] 自動起動を有効化しました。"),
+            Err(e) => {
+                eprintln!("[ERROR] 自動起動の登録に失敗しました: {}", e);
+                std::process::exit(1);
+            }
+        },
+        "disable" | "off" => match platform::disable_autostart() {
+            Ok(_) => println!("[SUCCESS] 自動起動を無効化しました。"),
+            Err(e) => {
+                eprintln!("[ERROR] 自動起動の解除に失敗しました: {}", e);
+                std::process::exit(1);
+            }
+        },
+        "status" => match platform::is_autostart_enabled() {
+            Ok(enabled) => {
+                println!("{}", serde_json::json!({ "autostart": enabled }));
+            }
+            Err(e) => {
+                eprintln!("[ERROR] 自動起動状態の確認に失敗しました: {}", e);
+                std::process::exit(1);
+            }
+        },
+        other => {
+            eprintln!("Unknown autostart subcommand: {} (使用可能: status, enable, disable)", other);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn print_config_pretty(cfg: &config::Config) {
+    let autostart = platform::is_autostart_enabled().unwrap_or(false);
+    let token_display = if cfg.token.is_empty() {
+        "(未設定)".to_string()
+    } else if cfg.token.len() <= 8 {
+        "********".to_string()
+    } else {
+        format!("{}...{} [設定済み]", &cfg.token[..4], &cfg.token[cfg.token.len()-4..])
+    };
+
+    println!("========================================");
+    println!(" 艦これ通知デーモン 設定一覧 (Config)");
+    println!("========================================");
+    println!("  サーバーURL       : {}", cfg.server_url);
+    println!("  端末トークン       : {}", token_display);
+    println!("  確認間隔           : {}秒", cfg.poll_interval_sec);
+    println!("  事前通知タイミング : {}秒前 (0=ジャスト)", cfg.notify_advance_sec);
+    println!("  サウンド通知       : {}", if cfg.play_sound { "有効 (true)" } else { "無効 (false)" });
+    println!("  自動起動 (OS常駐)  : {}", if autostart { "有効 (true)" } else { "無効 (false)" });
+    println!("========================================");
+    println!("設定ファイル: config.json");
+}
+
+fn cmd_config(args: &[String]) {
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("list");
+    match sub {
+        "set" => {
+            let key = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            let val = args.get(4).map(|s| s.as_str()).unwrap_or("");
+            if key.is_empty() || val.is_empty() {
+                eprintln!("使用法: kancolle-daemon config set <KEY> <VALUE>");
+                eprintln!("使用可能なキー: server_url, token, poll_interval, notify_advance, play_sound");
+                std::process::exit(1);
+            }
+            match config::set_value(key, val) {
+                Ok(new_cfg) => {
+                    println!("[SUCCESS] 設定を変更しました: {} = {}", key, val);
+                    print_config_pretty(&new_cfg);
+                }
+                Err(e) => {
+                    eprintln!("[ERROR] {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "list" | "get" => {
+            let cfg = load_config();
+            let is_json = args.iter().any(|a| a == "--json");
+            if is_json {
+                let autostart_enabled = platform::is_autostart_enabled().unwrap_or(false);
+                let mut v = serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
+                if let serde_json::Value::Object(ref mut map) = v {
+                    map.insert("autostart".to_string(), serde_json::Value::Bool(autostart_enabled));
+                }
+                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            } else {
+                print_config_pretty(&cfg);
+            }
+        }
+        "--json" => {
+            let cfg = load_config();
+            let autostart_enabled = platform::is_autostart_enabled().unwrap_or(false);
+            let mut v = serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
+            if let serde_json::Value::Object(ref mut map) = v {
+                map.insert("autostart".to_string(), serde_json::Value::Bool(autostart_enabled));
+            }
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        }
+        other => {
+            eprintln!("Unknown config subcommand: {} (使用可能: list, set, --json)", other);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn main() {
@@ -96,29 +209,27 @@ fn main() {
 
     match cmd {
         "run" => run_loop(),
-        "start" => {
-            match start_daemon_detached() {
-                Ok(pid) => {
-                    println!("[SUCCESS] Daemon started in background (PID: {}).", pid);
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] {}", e);
-                    std::process::exit(1);
-                }
+        "start" => match start_daemon_detached() {
+            Ok(pid) => {
+                println!("[SUCCESS] Daemon started in background (PID: {}).", pid);
             }
-        }
-        "stop" => {
-            match stop_daemon() {
-                Ok(_) => {
-                    println!("[SUCCESS] Daemon stopped successfully.");
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] {}", e);
-                    std::process::exit(1);
-                }
+            Err(e) => {
+                eprintln!("[ERROR] {}", e);
+                std::process::exit(1);
             }
-        }
+        },
+        "stop" => match stop_daemon() {
+            Ok(_) => {
+                println!("[SUCCESS] Daemon stopped successfully.");
+            }
+            Err(e) => {
+                eprintln!("[ERROR] {}", e);
+                std::process::exit(1);
+            }
+        },
         "status" => cmd_status(),
+        "autostart" => cmd_autostart(&args),
+        "config" => cmd_config(&args),
         "test" => {
             println!("[INFO] Sending test desktop notification...");
             match platform::test_notification() {

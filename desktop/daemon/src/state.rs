@@ -12,9 +12,32 @@ pub struct StatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AkashiShip {
+    pub id: u64,
+    pub name: String,
+    pub hp: u32,
+    pub max: u32,
+    pub repair: u64,
+    #[serde(rename = "mod", default = "default_mod")]
+    pub mod_val: f64,
+}
+
+fn default_mod() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AkashiRepairData {
+    pub start: u64,
+    #[serde(default)]
+    pub ships: Vec<AkashiShip>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlotItem {
     pub kind: String,
-    pub slot: u32,
+    #[serde(default)]
+    pub slot: Option<u32>,
     pub state: String,
     #[serde(default)]
     pub end: Option<u64>,
@@ -26,6 +49,8 @@ pub struct SlotItem {
     pub generation: Option<u64>,
     #[serde(default)]
     pub revision: Option<u64>,
+    #[serde(default)]
+    pub repair: Option<AkashiRepairData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -498,6 +498,7 @@ name = "kancolle-daemon"
 version = "0.1.0"
 dependencies = [
  "ctrlc",
+ "libc",
  "notify-rust",
  "serde",
  "serde_json",
