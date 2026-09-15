@@ -1,5 +1,6 @@
 export const MIN_REPAIR = 1200000;
 const minute = n => Math.ceil(n / 60000) * 60000;
+const positive = n => Number.isSafeInteger(n) && n > 0;
 
 export function repairProgress(ship, start, now) {
   const missing = ship.max - ship.hp;
@@ -17,17 +18,10 @@ export function repairLine(ship, start, now) {
   return `${ship.name}: ${ship.hp}->${p.hp} +${p.healed}　${now >= p.end ? '全回復' : `あと${Math.ceil((p.end - now) / 60000)}分　${day(now) === day(p.end) ? '' : day(p.end) + ' '}${clock}`}`;
 }
 
-export const isNotified = r => r.kind === 'akashi' ? !!r.repair && ['start', ...r.repair.ships.map(s => String(s.id))].every(id => (r.repairSent || []).includes(id)) : !!r.sent && r.sent.generation === r.generation;
-export const visibleReservation = r => ['active', 'pending'].includes(r.state) && !isNotified(r);
-
-// 艦隊の出撃状態は、通知の送信済み・未送信とは別に表示する。
-export function expeditionFor(local, fleet) {
-  const key = `expedition:${fleet}`;
-  return local?.localSlots?.[key] || null;
-}
-
-export function remainingText(end, now) {
-  if (!Number.isFinite(end) || !Number.isFinite(now)) return '時刻未取得';
-  if (end <= now) return '予定時刻到達';
-  return `あと${Math.ceil((end - now) / 60000)}分`;
+export function validRepair(value) {
+  return value && positive(value.start) && Array.isArray(value.ships) && value.ships.length > 0 && value.ships.length <= 7
+    && new Set(value.ships.map(s => s.id)).size === value.ships.length && value.ships.every(s => positive(s.id)
+      && typeof s.name === 'string' && s.name.length <= 80 && positive(s.hp) && positive(s.max) && s.max <= 10000
+      && s.hp < s.max && s.hp * 2 > s.max && positive(s.repair) && s.repair > 30000 && s.repair < 31536000000
+      && [1, 0.85].includes(s.mod));
 }

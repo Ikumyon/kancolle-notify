@@ -1,16 +1,35 @@
-import { validRepair, repairProgress, repairLine, MIN_REPAIR } from './akashi.js';
-import { retryDelay } from './retry.js';
+import { validRepair, repairProgress, MIN_REPAIR } from './akashi.js';
 import { validId, validGeneration, isCurrent } from './generation.js';
-export const emptyState = () => ({ epoch: crypto.randomUUID(), generation: '0', activeSession: null, starts: {}, slots: {}, history: [], delivery: null, authBlocked: false });
+import { getOffsetSec, nextDeliveryAt as timerNextDeliveryAt } from './timer.js';
+import { formatPlainText } from '../notify/formatters/text.js';
+
+export { formatPlainText as formatDelivery };
+export const retryDelay = attempt => Math.min(5, 2 ** Math.min(Math.max(0, attempt - 1), 3)) * 60000;
+
+export const emptyState = () => ({
+  epoch: crypto.randomUUID(),
+  generation: '0',
+  activeSession: null,
+  starts: {},
+  slots: {},
+  history: [],
+  delivery: null,
+  authBlocked: false,
+  offsetSec: 0,
+  notificationAdvanceSec: 0
+});
+
 const keyOf = e => `${e.kind}:${e.slot}`;
 const equal = (a, b) => a.state === b.state && a.end === b.end && a.subject === b.subject && a.name === (b.name || '') && JSON.stringify(a.repair || null) === JSON.stringify(b.repair || null);
+
 export function history(s, now, type, detail) {
   s.history.push({ ...detail, at: now, type });
 }
+
 export function prune(s, now) {
   s.history = s.history.filter(h => h.at >= now - 30 * 86400000);
-  // Generation tombstones and session high-water marks deliberately outlive display history.
 }
+
 export function validateObservation(o, now) {
   if (!o || !validId(o.session) || !validId(o.epoch) || !validGeneration(o.generation)
     || !Number.isSafeInteger(o.seq) || o.seq < 1 || Object.hasOwn(o, 'time')) return false;
@@ -34,6 +53,7 @@ export function validateObservation(o, now) {
   }
   return o.errors.every(e => typeof e === 'string' && /^[a-z_]{1,50}$/.test(e));
 }
+
 export function observe(s, input, device, now) {
   if (!validateObservation(input, now)) throw new Error('invalid_observation');
   if (!isCurrent(s, input, device)) return { seq: input.seq, status: 'stale_session', results: [] };
@@ -63,30 +83,50 @@ export function observe(s, input, device, now) {
   return { seq: input.seq, status: 'accepted', results };
 }
 
-function itemFor(key, r, now, advanceSec = 0) {
-  const advanceMs = ['expedition', 'repair', 'fatigue', 'akashi'].includes(r.kind) ? advanceSec * 1000 : 0;
-  const dueNow = now + advanceMs;
+function itemFor(key, r, now, offsetSec = 0) {
+  const isAdjustable = ['expedition', 'repair', 'fatigue', 'akashi'].includes(r.kind);
+  const offsetMs = isAdjustable ? offsetSec * 1000 : 0;
+
   if (r.kind === 'akashi') {
     if (r.state !== 'active' || !r.repair) return null;
     const sent = r.repairSent || [];
-    const due = [{ id: 'start', end: r.repair.start + MIN_REPAIR }, ...r.repair.ships.map(ship => ({ id: String(ship.id), end: repairProgress(ship, r.repair.start, now).end }))].filter(x => x.end <= dueNow && !sent.includes(x.id));
+    const due = [
+      { id: 'start', end: r.repair.start + MIN_REPAIR },
+      ...r.repair.ships.map(ship => ({ id: String(ship.id), end: repairProgress(ship, r.repair.start, now).end }))
+    ].filter(x => (x.end + offsetMs) <= now && !sent.includes(x.id));
+
     if (!due.length) return null;
-    return { key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision, type: 'normal', end: Math.min(...due.map(x => x.end)), state: r.state, repair: structuredClone(r.repair), milestones: due.map(x => x.id), at: now, advanceMs };
+    return {
+      key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
+      type: 'normal', end: Math.min(...due.map(x => x.end)), state: r.state,
+      repair: structuredClone(r.repair), milestones: due.map(x => x.id), at: now,
+      offsetMs, advanceMs: offsetMs < 0 ? -offsetMs : 0
+    };
   }
+
   const sent = r.sent?.generation === r.generation ? r.sent : null;
   if (sent) {
     const changedEnd = r.state === 'active' && r.end !== sent.end;
-    const earlyComplete = (['complete', 'empty'].includes(r.state) && r.observation.receivedAt < sent.end - (sent.advanceMs || 0))
+    const earlyComplete = (['complete', 'empty'].includes(r.state) && r.observation.receivedAt < sent.end + (sent.offsetMs || 0))
       || r.kind === 'fatigue' && r.state === 'pending';
     if (!(changedEnd || earlyComplete) || sent.correctedRevision === r.revision) return null;
-    return { key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
-      type: 'correction', end: r.end, state: r.state, name: r.name };
+    return {
+      key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
+      type: 'correction', end: r.end, state: r.state, name: r.name
+    };
   }
-  if (r.state !== 'active' || r.end > dueNow) return null;
-  return { key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
-    type: now - r.end >= 120000 ? 'delayed' : 'normal', end: r.end, state: r.state,
-    name: r.name, advanceMs, early: r.end > now };
+
+  if (r.state !== 'active') return null;
+  const notifyAt = r.end + offsetMs;
+  if (notifyAt > now) return null;
+
+  return {
+    key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
+    type: now - notifyAt >= 120000 ? 'delayed' : 'normal', end: r.end, state: r.state,
+    name: r.name, offsetMs, advanceMs: offsetMs < 0 ? -offsetMs : 0, early: notifyAt < r.end
+  };
 }
+
 export function manualReservation(s, command, device, now) {
   if (!command || typeof command.id !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(command.id)
     || !['create', 'cancel'].includes(command.action)) throw new Error('invalid_manual');
@@ -100,7 +140,6 @@ export function manualReservation(s, command, device, now) {
     }
     return { key, reservation: structuredClone(existing), status: 'cancelled' };
   }
-  // Request ID is persisted before send. Retrying an ambiguous create never shifts the timer.
   if (existing) return { key, reservation: structuredClone(existing), status: 'duplicate' };
   if (typeof command.title !== 'string' || command.title.trim().length < 1 || command.title.length > 80) throw new Error('invalid_manual');
   const end = command.mode === 'minutes' && Number.isInteger(command.minutes) && command.minutes >= 1 && command.minutes <= 525600
@@ -114,16 +153,19 @@ export function manualReservation(s, command, device, now) {
   history(s, now, 'manual_create', { key, name: r.name, end });
   return { key, reservation: structuredClone(r), status: 'applied' };
 }
+
 export function claimDelivery(s, now, token) {
   if (s.authBlocked) return null;
   let d = s.delivery;
-  if (d && d.leaseUntil > now || d && d.nextTry > now) return null;
+  if (d && (d.leaseUntil > now || d.nextTry > now)) return null;
+
+  const offsetSec = getOffsetSec(s);
+
   if (d) {
-    // A retry after a crash/timeout may follow a successful external send. Track that possibility.
     for (const item of d.uncertain ? d.items : []) {
       const r = s.slots[item.key];
       if (r && r.kind !== 'akashi' && r.generation === item.generation && !r.sent) {
-        r.sent = { generation: item.generation, revision: item.revision, end: item.end, advanceMs: item.advanceMs || 0, uncertain: true };
+        r.sent = { generation: item.generation, revision: item.revision, end: item.end, offsetMs: item.offsetMs || 0, uncertain: true };
       }
     }
     const stillCurrent = d.items.filter(i => {
@@ -131,42 +173,22 @@ export function claimDelivery(s, now, token) {
     });
     if (!stillCurrent.length) { s.delivery = null; d = null; }
     else {
-      d.items = stillCurrent.map(i => i.kind === 'akashi' ? itemFor(i.key, s.slots[i.key], now, s.notificationAdvanceSec || 0) : i).filter(Boolean);
+      d.items = stillCurrent.map(i => i.kind === 'akashi' ? itemFor(i.key, s.slots[i.key], now, offsetSec) : i).filter(Boolean);
       if (!d.items.length) { s.delivery = null; d = null; }
     }
   }
+
   if (!d) {
-    const items = Object.entries(s.slots).map(([k, r]) => itemFor(k, r, now, s.notificationAdvanceSec || 0)).filter(Boolean);
+    const items = Object.entries(s.slots).map(([k, r]) => itemFor(k, r, now, offsetSec)).filter(Boolean);
     if (!items.length) return null;
     d = { id: token, items, attempt: 0, nextTry: 0, leaseUntil: 0 };
   }
+
   d.token = token; d.leaseUntil = now + 60000; d.attempt += 1; d.uncertain = true;
   s.delivery = d;
   return structuredClone(d);
 }
-// 次の配信に必要な時刻だけを返す。予定なし・配信停止中は起動しない。
-export function nextDeliveryAt(state, now) {
-  if (state.authBlocked) return null;
-  const s = structuredClone(state);
-  if (claimDelivery(s, now, 'alarm-preview')) return now;
-  if (s.delivery) return Math.max(now, s.delivery.nextTry || 0, s.delivery.leaseUntil || 0);
-  const times = [];
-  const advance = (s.notificationAdvanceSec || 0) * 1000;
-  for (const r of Object.values(s.slots)) {
-    if (r.state !== 'active') continue;
-    if (r.kind === 'akashi' && r.repair) {
-      const sent = r.repairSent || [];
-      if (!sent.includes('start')) times.push(r.repair.start + MIN_REPAIR - advance);
-      for (const ship of r.repair.ships) if (!sent.includes(String(ship.id))) {
-        times.push(repairProgress(ship, r.repair.start, now).end - advance);
-      }
-    } else if (!(r.sent && r.sent.generation === r.generation)) {
-      times.push(r.end - (['expedition', 'repair', 'fatigue'].includes(r.kind) ? advance : 0));
-    }
-  }
-  const valid = times.filter(Number.isSafeInteger);
-  return valid.length ? Math.max(now, Math.min(...valid)) : null;
-}
+
 export function finishDelivery(s, token, now, result) {
   const d = s.delivery;
   if (!d || d.token !== token) return false;
@@ -174,9 +196,13 @@ export function finishDelivery(s, token, now, result) {
     for (const item of d.items) {
       const r = s.slots[item.key];
       if (r && r.generation === item.generation) {
-        if (item.kind === 'akashi' && r.repair?.start === item.repair.start) r.repairSent = [...new Set([...(r.repairSent || []), ...item.milestones])];
-        r.sent = { generation: item.generation, revision: item.revision, end: item.end, advanceMs: item.advanceMs || 0,
-          correctedRevision: item.type === 'correction' ? item.revision : null };
+        if (item.kind === 'akashi' && r.repair?.start === item.repair.start) {
+          r.repairSent = [...new Set([...(r.repairSent || []), ...item.milestones])];
+        }
+        r.sent = {
+          generation: item.generation, revision: item.revision, end: item.end,
+          offsetMs: item.offsetMs || 0, correctedRevision: item.type === 'correction' ? item.revision : null
+        };
       }
       history(s, now, 'sent', { ...item, deliveryType: item.type, messageId: result.messageId || null });
     }
@@ -188,19 +214,10 @@ export function finishDelivery(s, token, now, result) {
     s.authBlocked = !!result.permanent;
     history(s, now, 'send_error', { code: result.code || 'transport', attempt: d.attempt });
   }
-  prune(s, now); return true;
+  prune(s, now);
+  return true;
 }
-export function formatDelivery(d) {
-  const labels = { expedition: '遠征', repair: '入渠', build: '建造', fatigue: '疲労回復見込み' };
-  const date = n => new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(n);
-  return d.items.map(i => {
-    if (i.kind === 'akashi') return `${i.end > i.at ? '【事前通知】' : ''}第${i.slot}艦隊 泊地修理${i.milestones.includes('start') ? '開始予定（20分）' : ' 全回復見込み'}\nHP回復見込み\n${i.repair.ships.map(ship => repairLine(ship, i.repair.start, i.at)).join('\n')}`;
-    const prefix = i.type === 'correction' ? '【訂正】' : i.type === 'delayed' || d.attempt > 1 ? '【遅延通知】' : '';
-    const title = i.kind === 'manual' ? `手動予約 ${i.name}` : `${labels[i.kind]} ${['expedition', 'fatigue'].includes(i.kind) ? '第' + i.slot + '艦隊' : '第' + i.slot + 'ドック'}${i.name ? ' ' + i.name : ''}`;
-    const text = i.type === 'correction' ? i.end ? `終了予定を${date(i.end)}に更新しました` : '終了予定の通知は不要になりました'
-      : i.early ? `終了予定の事前通知です（予定：${date(i.end)}／設定：${i.advanceMs / 1000}秒前）`
-      : i.kind === 'fatigue' ? `目標の疲労度に回復する見込みの時刻です（${date(i.end)}）。母港で実際の疲労度を確認してください。`
-      : `終了予定時刻になりました（${date(i.end)}）`;
-    return `${prefix}${title}\n${text}`;
-  }).join('\n\n');
+
+export function nextDeliveryAt(state, now) {
+  return timerNextDeliveryAt(state, now, claimDelivery);
 }

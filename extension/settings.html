@@ -45,9 +45,9 @@
   <section class="settings-card">
     <h2>通知時刻の調整</h2>
     <form id="notification-settings">
-      <label>通知を早める秒数<input id="notification-advance" type="number" min="0" max="3600" step="1" value="0" required></label>
-      <p class="muted setting-desc">遠征・入渠・疲労回復・泊地修理に適用します。建造・手動予約は対象外です。0で調整なし。中央サーバーで処理します。</p>
-      <p class="muted setting-desc">中央は調整後の通知時刻に起動します。予定の変更・取消に合わせて予約も更新されます。</p>
+      <label>通知時刻のオフセット（秒数）<input id="notification-advance" type="number" min="-3600" max="3600" step="1" value="0" required></label>
+      <p class="muted setting-desc">マイナスで早める（例: -59で59秒前）、プラスで遅くする（例: 60で1分後）、0で定刻通知。遠征・入渠・疲労回復・泊地修理に適用します。</p>
+      <p class="muted setting-desc">設定は中央サーバーで一元管理されます。画面を開くと現在の中央設定が表示されます。</p>
       <button type="submit">中央へ保存</button><p id="notification-notice" role="status"></p>
     </form>
   </section>
