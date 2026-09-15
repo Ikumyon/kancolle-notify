@@ -62,7 +62,7 @@ const defaultMissions = new Map([
 export function parameters(request) {
   const allowed = new Set(['api_id', 'api_ship_idx', 'api_deck_id', 'api_ndock_id', 'api_kdock_id', 'api_ship_id', 'api_highspeed', 'api_mission_id']);
   const data = request?.postData;
-  const pairs = data?.params?.map(p => [p.name, p.value]) ?? [...new URLSearchParams(data?.text || '')];
+  const pairs = data?.params?.length ? data.params.map(p => [p.name, p.value]) : [...new URLSearchParams(data?.text || '')];
   return Object.fromEntries(pairs.filter(([k]) => allowed.has(k)).map(([k, v]) => [k, Number(v)]));
 }
 export class Parser {
@@ -145,6 +145,9 @@ export class Parser {
             if (kind === 'expedition') {
               event.subject = params.api_mission_id;
               if (integer(event.subject)) event.name = this.missions.get(event.subject) || '';
+              // 開始応答の確定時刻も艦隊情報と同じ形式で送る。後続の母港更新を待たない。
+              const end = b.api_data?.api_complatetime;
+              if (time(end)) { event.action = 'snapshot'; event.state = 'active'; event.end = end; }
             }
             if (kind !== 'build' && (!integer(event.subject) || event.subject <= 0)) errors.push('operation_subject');
             else events.push(event);

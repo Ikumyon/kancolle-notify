@@ -1,7 +1,5 @@
 <!doctype html><html lang="ja"><meta charset="utf-8"><title>艦これ 予約と履歴</title><link rel="stylesheet" href="ui.css">
-<body><h1>予約と通知履歴</h1><p id="notice" role="status">確認中…</p><div id="summary"></div>
-<nav><button id="refresh">更新</button><button id="retry" class="secondary">同期を再試行</button><button id="resume" class="secondary">配信設定修正後に再開</button><a class="button" href="settings.html" target="_blank">設定</a></nav>
-<section><h2>中央に保存された予定</h2><div class="scroll"><table><thead><tr><th>対象</th><th>状態</th><th>終了予定（日本時間）</th><th>同期</th></tr></thead><tbody id="reservations"></tbody></table></div></section>
-<section><h2>最近の通知・変更・エラー</h2><ul id="history"></ul></section>
-<section><h2>この端末から送った情報</h2><p class="muted">中央が受け取った直近50件。</p><div id="sent-information"></div></section>
-<section><h2>送信待ち</h2><div id="pending-information"></div></section><script type="module" src="ui.js"></script></body></html>
+<body><h1>この端末の取得内容と送信履歴</h1><p id="notice" role="status">保存データを読み込み中…</p><div id="summary"></div>
+<nav><button id="retry" class="secondary">送信を再試行</button><a class="button" href="settings.html" target="_blank">設定</a></nav>
+<section><h2>この端末の現在の予定</h2><div class="scroll"><table><thead><tr><th>対象</th><th>状態</th><th>終了予定（日本時間）</th></tr></thead><tbody id="reservations"></tbody></table></div></section>
+<section><h2>送信履歴（最新10件）</h2><button id="download-pending" type="button">送信待ちをJSONで保存</button><p id="download-notice" role="status"></p><div id="transmission-information"></div></section><script type="module" src="ui-entry.js"></script></body></html>

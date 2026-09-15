@@ -2,7 +2,9 @@
   "name": "kancolle-notify",
   "main": "server/worker.js",
   "compatibility_date": "2026-09-09",
-  "triggers": { "crons": ["* * * * *"] },
+  "triggers": { "crons": [] },
+  "durable_objects": { "bindings": [{ "name": "SCHEDULER", "class_name": "NotificationScheduler" }] },
+  "migrations": [{ "tag": "scheduler-v1", "new_sqlite_classes": ["NotificationScheduler"] }],
   "d1_databases": [{ "binding": "DB", "database_name": "kancolle-notify", "database_id": "REPLACE_WITH_D1_ID" }],
   "observability": { "enabled": false }
 }

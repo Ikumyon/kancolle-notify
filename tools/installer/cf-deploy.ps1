@@ -118,7 +118,9 @@ if (!(Test-Path $workerFile)) {
 }
 $workerContent = [System.IO.File]::ReadAllBytes($workerFile)
 
-$metadata = @{
+$scripts = Invoke-CfApi -Uri "https://api.cloudflare.com/client/v4/accounts/$accountId/workers/scripts"
+$existingScript = $scripts.result | Where-Object { $_.id -eq 'kancolle-notify' } | Select-Object -First 1
+$metadataObject = @{
     main_module = "bundled-worker.js"
     compatibility_date = "2026-09-09"
     bindings = @(
@@ -127,8 +129,19 @@ $metadata = @{
             name = "DB"
             id = $dbId
         }
+        @{
+            type = "durable_object_namespace"
+            name = "SCHEDULER"
+            class_name = "NotificationScheduler"
+        }
     )
-} | ConvertTo-Json -Compress -Depth 10
+}
+if ($existingScript.migration_tag -ne 'scheduler-v1') {
+    $migration = @{ new_tag = 'scheduler-v1'; steps = @( @{ new_sqlite_classes = @('NotificationScheduler') } ) }
+    if ($existingScript.migration_tag) { $migration.old_tag = $existingScript.migration_tag }
+    $metadataObject.migrations = $migration
+}
+$metadata = $metadataObject | ConvertTo-Json -Compress -Depth 10
 
 $boundary = "----WebKitFormBoundary" + [System.Guid]::NewGuid().ToString("N")
 $LF = "`r`n"
@@ -174,11 +187,11 @@ if ($uploadResp.success -ne $true) {
 }
 LogInfo "Worker script deployed successfully."
 
-# 5. Set Cron Trigger (* * * * *)
-LogInfo "Setting schedule trigger (* * * * *)..."
-$cronBody = @( @{ cron = "* * * * *" } )
+# 5. Durable Object alarms replace periodic Cron triggers.
+LogInfo "Removing periodic schedule triggers..."
+$cronBody = '[]'
 $null = Invoke-CfApi -Uri "https://api.cloudflare.com/client/v4/accounts/$accountId/workers/scripts/kancolle-notify/schedules" -Method "PUT" -Body $cronBody
-LogInfo "Schedule trigger configured."
+LogInfo "Alarm scheduling enabled; periodic triggers removed."
 
 # 6. Generate Device Token & Secrets
 LogInfo "Generating device authentication token..."

@@ -1,6 +1,6 @@
 import { beginSession } from '../extension/core/generation.js';
 import { Repository } from './repository.js';
-import { observe, claimDelivery, finishDelivery, formatDelivery, prune, manualReservation } from '../extension/core/state.js';
+import { observe, claimDelivery, finishDelivery, formatDelivery, prune, manualReservation, nextDeliveryAt } from '../extension/core/state.js';
 async function hash(value) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map(n => n.toString(16).padStart(2, '0')).join('');
 }
@@ -17,13 +17,26 @@ async function snapshot(repo) {
   const { state } = await repo.read();
   return { now: Date.now(), slots: state.slots, history: await repo.history(),
     pendingDelivery: state.delivery ? { attempt: state.delivery.attempt, nextTry: state.delivery.nextTry } : null,
-    authBlocked: state.authBlocked };
+    authBlocked: state.authBlocked, notificationAdvanceSec: state.notificationAdvanceSec || 0,
+    nextNotificationAt: nextDeliveryAt(state, Date.now()) };
 }
 export async function handle(request, env) {
   const device = await authenticate(request, env);
   if (!device) return json({ error: 'unauthorized' }, 401);
   const url = new URL(request.url), repo = new Repository(env.DB);
   if (request.method === 'GET' && url.pathname === '/v2/status') return json(await snapshot(repo));
+  if (request.method === 'POST' && url.pathname === '/v2/notification-settings') {
+    const text = await request.text();
+    if (text.length > 512) return json({ error: 'invalid_settings' }, 400);
+    let body; try { body = JSON.parse(text); } catch { return json({ error: 'invalid_settings' }, 400); }
+    if (!Number.isInteger(body?.advanceSec) || body.advanceSec < 0 || body.advanceSec > 3600) return json({ error: 'invalid_settings' }, 400);
+    await repo.mutate(s => {
+      s.notificationAdvanceSec = body.advanceSec;
+      // 送信された可能性のある配信は維持し、未送信の再試行分のみ新設定で再計算する。
+      if (s.delivery && !s.delivery.uncertain && s.delivery.leaseUntil <= Date.now()) s.delivery = null;
+    });
+    return json({ advanceSec: body.advanceSec });
+  }
   if (request.method === 'POST' && url.pathname === '/v2/session') {
     const text = await request.text();
     if (text.length > 512) return json({ error: 'invalid_session' }, 400);
@@ -133,16 +146,43 @@ export async function dispatch(env, { now = () => Date.now(), send = fetch } = {
   await repo.mutate(s => finishDelivery(s, token, now(), result));
   console.info('dispatch_result', result.ok ? 'sent' : result.code);
 }
+export class NotificationScheduler {
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.serial = Promise.resolve(); }
+  run(fn) {
+    const result = this.serial.then(fn);
+    this.serial = result.catch(() => {});
+    return result;
+  }
+  async schedule() {
+    const { state } = await new Repository(this.env.DB).read();
+    const next = nextDeliveryAt(state, Date.now());
+    if (next === null) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(Math.max(Date.now() + 1, next));
+  }
+  fetch(request) {
+    return this.run(async () => {
+      // D1更新と予約更新の途中で停止した場合の復旧用。正常終了時は本来の予約に置き換える。
+      await this.ctx.storage.setAlarm(Date.now() + 60000);
+      const response = await handle(request, this.env);
+      await this.schedule();
+      return response;
+    });
+  }
+  alarm() {
+    return this.run(async () => {
+      await this.ctx.storage.setAlarm(Date.now() + 60000);
+      await dispatch(this.env);
+      await this.schedule();
+    });
+  }
+}
 export default {
-  async fetch(request, env) { try { return await handle(request, env); } catch { return json({ error: 'server_error' }, 503); } },
-  async scheduled(event, env) {
-    console.info('scheduled_start', event.cron, event.scheduledTime);
+  async fetch(request, env) {
     try {
-      await dispatch(env);
-      console.info('scheduled_complete');
-    } catch {
-      console.error('scheduled_failed');
-      throw new Error('scheduled_dispatch_failed');
-    }
+      // 認証済みの変更と配信を同じオブジェクトで順番に処理する。
+      if (!env.SCHEDULER) return await handle(request, env); // ローカルの模擬環境用
+      if (!await authenticate(request, env)) return json({ error: 'unauthorized' }, 401);
+      return await env.SCHEDULER.get(env.SCHEDULER.idFromName('owner')).fetch(request);
+    } catch { return json({ error: 'server_error' }, 503); }
   }
 };

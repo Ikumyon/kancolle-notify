@@ -23,12 +23,12 @@
       <label>中央サービスURL<input id="url" type="url" required placeholder="https://kancolle-notify.example.workers.dev"></label>
       <label>この端末の接続トークン<input id="token" type="password" required autocomplete="off" minlength="32"></label>
       <div class="settings-action-row">
-        <button type="submit"><i class="fa-solid fa-floppy-disk"></i> 保存して接続</button>
+        <button type="submit"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
       </div>
     </form>
     <div class="connection-status-box" aria-live="polite">
       <p id="saved-state">保存状態を確認中…</p>
-      <p id="connection-state">接続：未確認</p>
+      <p id="connection-state">送信時に接続します</p>
     </div>
     <p id="notice" role="status"></p>
   </section>
@@ -42,6 +42,15 @@
     </div>
   </section>
 
+  <section class="settings-card">
+    <h2>通知時刻の調整</h2>
+    <form id="notification-settings">
+      <label>通知を早める秒数<input id="notification-advance" type="number" min="0" max="3600" step="1" value="0" required></label>
+      <p class="muted setting-desc">遠征・入渠・疲労回復・泊地修理に適用します。建造・手動予約は対象外です。0で調整なし。中央サーバーで処理します。</p>
+      <p class="muted setting-desc">中央は調整後の通知時刻に起動します。予定の変更・取消に合わせて予約も更新されます。</p>
+      <button type="submit">中央へ保存</button><p id="notification-notice" role="status"></p>
+    </form>
+  </section>
   <section class="settings-card">
     <h2><i class="fa-solid fa-battery-half"></i> 疲労回復の目標値</h2>
     <form id="fatigue-settings">
@@ -60,4 +69,4 @@
 <footer class="settings-footer">
   <p class="muted">TelegramのBotトークンは中央側で設定します。表示は日本時間、履歴は30日保存します。</p>
 </footer>
-<script type="module" src="settings.js"></script><script type="module" src="fatigue-settings.js"></script></body></html>
+<script type="module" src="settings.js"></script><script type="module" src="fatigue-settings.js"></script><script type="module" src="notification-settings.js"></script></body></html>

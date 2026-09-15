@@ -39,7 +39,7 @@ function updateUiForMode(isTest, config, productionConfig) {
     tokenInput.disabled = false;
     tokenInput.required = true;
     button.disabled = false;
-    button.textContent = '保存して接続';
+    button.textContent = '保存';
     saved.textContent = config ? `保存済み：${config.url}（トークン登録済み）` : '未保存';
     saved.className = config ? 'good' : '';
   }
@@ -54,7 +54,7 @@ storage('get', ['config', 'productionConfig', 'testMode', 'hideBuildName']).then
   if (hideBuildNameCheck) {
     hideBuildNameCheck.checked = !!r.hideBuildName;
   }
-  if (isTest) testConnection(TEST_URL, TEST_TOKEN);
+  connection.textContent = '送信時に接続します';
 }).catch(e => { saved.textContent = '保存状態を確認できません'; notice.textContent = e.message; });
 
 hideBuildNameCheck?.addEventListener('change', async () => {
@@ -73,31 +73,6 @@ hideBuildNameCheck?.addEventListener('change', async () => {
   }
 });
 
-async function testConnection(url, token) {
-  connection.textContent = '接続：確認中…';
-  connection.className = '';
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-  try {
-    const response = await fetch(url + '/v2/status', {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal, redirect: 'error', cache: 'no-store', credentials: 'omit'
-    });
-    if (response.status === 401) throw new Error('トークンが一致しません。');
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const check = await response.json();
-    if (!Number.isFinite(check.now) || !check.slots) throw new Error('中央の応答形式が正しくありません。');
-    await storage('set', { remoteCache: { ...check, cachedAt: Date.now() } });
-    connection.textContent = '接続：成功';
-    connection.className = 'good';
-    return true;
-  } catch (e) {
-    connection.textContent = `接続：失敗（${e.message}）`;
-    connection.className = 'error';
-    return false;
-  } finally { clearTimeout(timeout); }
-}
-
 testModeCheck?.addEventListener('change', async () => {
   const isTest = testModeCheck.checked;
   notice.textContent = isTest ? 'テストモードへ切り替え中…' : '通常モードへ復元中…';
@@ -113,7 +88,7 @@ testModeCheck?.addEventListener('change', async () => {
       });
       updateUiForMode(true, { url: TEST_URL, token: TEST_TOKEN }, prod);
       notice.textContent = 'テストモードに切り替えました。接続先をローカル疑似環境（127.0.0.1:8787）に固定しました。';
-      await testConnection(TEST_URL, TEST_TOKEN);
+      connection.textContent = '送信時に接続します';
     } else {
       const restored = current.productionConfig || null;
       await storage('set', {
@@ -122,7 +97,7 @@ testModeCheck?.addEventListener('change', async () => {
         blocked: false, retryPending: false, attempt: 0, lastError: ''
       });
       updateUiForMode(false, restored, null);
-      connection.textContent = '接続：未確認（通常モードに復帰）';
+      connection.textContent = '送信時に接続します';
       connection.className = '';
       notice.textContent = '通常モード（本番設定）に復帰しました。';
     }
@@ -132,7 +107,7 @@ testModeCheck?.addEventListener('change', async () => {
 });
 
 form.addEventListener('invalid', () => { notice.textContent = 'URLと32文字以上の接続トークンを入力してください。'; }, true);
-form.addEventListener('input', () => { button.textContent = '保存して接続'; });
+form.addEventListener('input', () => { button.textContent = '保存'; });
 form.addEventListener('submit', async event => {
   event.preventDefault();
   button.disabled = true; button.textContent = '保存中…'; notice.textContent = '設定を保存しています…';
@@ -152,10 +127,9 @@ form.addEventListener('submit', async event => {
     saved.textContent = `保存済み：${stored.config.url}（トークン登録済み）`; saved.className = 'good';
     button.textContent = '保存済み'; notice.textContent = '設定を保存しました。';
     tokenInput.value = '';
-    const ok = await testConnection(url.origin, token);
-    if (!ok) throw new Error('接続テストに失敗しました。');
+    connection.textContent = '送信時に接続します';
   } catch (e) {
-    notice.textContent = `${persisted ? '設定は保存済みですが接続に失敗しました' : '保存できませんでした'}：${e.message}`;
-    button.textContent = persisted ? '保存済み' : '保存して接続';
+    notice.textContent = `${persisted ? '設定は保存済みです' : '保存できませんでした'}：${e.message}`;
+    button.textContent = persisted ? '保存済み' : '保存';
   } finally { button.disabled = false; }
 });

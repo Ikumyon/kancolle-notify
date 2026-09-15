@@ -1,6 +1,7 @@
 import { retryDelay } from './core/retry.js';
 import { eventKey, eventSignature } from './core/generation.js';
 import { fatigueEvents, fatigueSettings, emptyFatigueSettings, validTarget } from './core/fatigue.js';
+import { localView } from './core/local.js';
 let serial = Promise.resolve();
 const exclusive = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
 const read = async () => ({ queue: [], errors: [], attempt: 0, retryPending: false, ...(await chrome.storage.local.get(null)) });
@@ -30,40 +31,55 @@ async function error(code) {
   await save({ lastError: code, errors: [...s.errors, { code }].slice(-100) });
 }
 async function sendManual() {
+  try { return await deliverManual(); }
+  catch (e) {
+    const s = await read();
+    if (s.pendingManual) await save({ pendingManual: { ...s.pendingManual, sendError: e.message } });
+    throw e;
+  }
+}
+async function deliverManual() {
   const s = await read(); if (!s.pendingManual) return { ok: true };
-  const result = await request('/v2/manual', { method: 'POST', body: JSON.stringify(s.pendingManual) });
+  const { queuedAt, sendError, ...command } = s.pendingManual;
+  const result = await request('/v2/manual', { method: 'POST', body: JSON.stringify(command) });
   const r = result.reservation;
   if (!r || !Number.isFinite(result.now)) throw new Error('invalid_reply');
   const recentSent = [...(s.recentSent || []), { session: s.pendingManual.id, seq: r.revision,
-    receivedAt: result.now, epoch: null, generation: null,
+    queuedAt, receivedAt: result.now, epoch: null, generation: null,
     events: [{ kind: 'manual', slot: null, name: r.name, state: r.state, end: r.end, action: s.pendingManual.action }],
     errors: [], result: { status: result.status } }].slice(-50);
-  await save({ pendingManual: null, recentSent, lastSync: result.now, remoteCache: result.state });
+  const manualSlots = { ...s.manualSlots, [`manual:${s.pendingManual.id}`]: {
+    kind: 'manual', slot: null, name: r.name, state: r.state, end: r.end, action: s.pendingManual.action
+  } };
+  await save({ pendingManual: null, manualSlots, recentSent, lastSync: result.now, remoteCache: result.state });
   return result;
 }
-async function flush(force = false, allowBegin = false) {
+async function flush(force = false) {
   let s = await read();
-  if (!s.config || !s.play || s.play.retired || s.blocked || s.retryPending && !force) return;
+  let attempted = [];
+  if (!s.queue.length || !s.config || !s.play || s.play.retired || s.blocked || s.retryPending && !force) return;
   try {
+    attempted = s.queue.slice(0, 10);
     if (!s.play.ticket) {
-      if (!allowBegin) return;
       const result = await request('/v2/session', { method: 'POST', body: JSON.stringify({ session: s.play.session }) });
       if (!result.ticket || result.ticket.session !== s.play.session) throw new Error('invalid_reply');
       s.play.ticket = result.ticket;
       await save({ play: s.play, remoteCache: result.state });
     }
     for (let round = 0; round < 4 && s.queue.length; round++) {
-      const batch = s.queue.slice(0, 10).map(o => ({ ...o, ...s.play.ticket }));
+      attempted = s.queue.slice(0, 10);
+      const batch = attempted.map(o => ({ session: o.session, seq: o.seq, events: o.events, errors: o.errors, ...s.play.ticket }));
       const result = await request('/v2/observations', { method: 'POST', body: JSON.stringify({ observations: batch }) });
       if (!Array.isArray(result.results) || result.results.length !== batch.length
         || !result.results.every((r, i) => r.seq === batch[i].seq)) throw new Error('invalid_reply');
       if (result.results.some(r => r.status === 'stale_session')) {
         s.play.retired = true;
-        await save({ play: s.play, queue: [], lastError: 'stale_session', retryPending: false, remoteCache: result.state });
+        const rejected = s.queue.map(o => ({ ...o, sendError: 'stale_session', receivedAt: result.now, result: { status: 'stale_session' } }));
+        await save({ play: s.play, queue: [], recentSent: [...(s.recentSent || []), ...rejected].slice(-50), lastError: 'stale_session', retryPending: false, remoteCache: result.state });
         await chrome.alarms.clear('retry'); return;
       }
       for (const o of batch) for (const e of o.events) s.play.baseline[eventKey(e)] = eventSignature(e);
-      const receipts = batch.map((o, i) => ({ ...o, receivedAt: result.now, result: result.results[i] }));
+      const receipts = batch.map((o, i) => ({ ...o, queuedAt: attempted[i].queuedAt, receivedAt: result.now, result: result.results[i] }));
       s.recentSent = [...(s.recentSent || []), ...receipts].slice(-50);
       s.queue = s.queue.slice(batch.length);
       await save({ play: s.play, queue: s.queue, lastSync: result.now, lastResults: result.results,
@@ -75,21 +91,29 @@ async function flush(force = false, allowBegin = false) {
   } catch (e) {
     const blocked = ['authentication', 'invalid_data'].includes(e.message);
     await error(e.message);
-    await save({ blocked, attempt: s.attempt + 1, retryPending: !blocked });
+    const failedSeqs = new Set(attempted.map(o => o.seq));
+    s.queue = s.queue.map(o => failedSeqs.has(o.seq) ? { ...o, sendError: e.message } : o);
+    await save({ queue: s.queue, blocked, attempt: s.attempt + 1, retryPending: !blocked });
     if (!blocked) await chrome.alarms.create('retry', { delayInMinutes: retryDelay(s.attempt + 1) / 60000 });
   }
 }
 async function enqueueEvents(s, incoming) {
+  if (incoming.length) {
+    s.localSlots = { ...(s.localSlots || s.expeditionSlots) };
+    for (const e of incoming) s.localSlots[eventKey(e)] = e;
+    await save({ localSlots: s.localSlots });
+  }
+  if (s.play.retired) return;
   const known = { ...s.play.baseline };
   for (const pending of s.queue) for (const e of pending.events) known[eventKey(e)] = eventSignature(e);
   const events = incoming.filter(e => known[eventKey(e)] !== eventSignature(e));
-  if (!events.length) return;
+  if (!events.length) { if (s.queue.length) await flush(); return; }
   s.play.seq = (s.play.seq || 0) + 1;
-  s.queue.push({ session: s.play.session, seq: s.play.seq, events, errors: [] });
+  s.queue.push({ session: s.play.session, seq: s.play.seq, events, errors: [], queuedAt: Date.now() });
   await save({ play: s.play, queue: s.queue }); await flush();
 }
 async function refreshFatigue(s) {
-  if (!s.play || s.play.retired || !s.fatigueSnapshot) return;
+  if (!s.play || !s.fatigueSnapshot) return;
   await enqueueEvents(s, fatigueEvents(s.fatigueSnapshot, s.fatigueSettings || emptyFatigueSettings()));
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -99,16 +123,17 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       case 'begin': {
         const s = await read();
         if (s.play?.session !== message.session) {
-          await save({ play: { session: message.session, ticket: null, baseline: {}, retired: false, seq: 0 }, fatigueSnapshot: null, akashi: null,
-            queue: [], blocked: false, retryPending: false, attempt: 0 });
+          // 比較用の保存内容と未送信分は、DevToolsを開き直しても維持する。
+          const queue = s.queue.map((o, i) => ({ ...o, session: message.session, seq: i + 1 }));
+          await save({ play: { session: message.session, ticket: null, baseline: s.play?.baseline || {}, retired: false, seq: queue.length },
+            queue, blocked: false, retryPending: false, attempt: 0 });
         }
-        await flush(false, true); return { ok: true };
+        return { ok: true };
       }
       case 'enqueue': {
         let s = await read(); const o = message.observation;
         if (!o || !Number.isSafeInteger(o.seq)) throw new Error('invalid_data');
-        if (s.play?.session !== o.session || s.play.retired) return { ignored: true };
-        if (!s.play.ticket && !o.errors?.length) { await save({ retryPending: false }); await flush(false, true); s = await read(); } 
+        if (s.play?.session !== o.session) return { ignored: true };
         if (o.errors?.length) await error(o.errors.join(','));
         if (message.fatigue) { s.fatigueSnapshot = message.fatigue; await save({ fatigueSnapshot: message.fatigue }); }
         const fatigue = message.fatigue ? fatigueEvents(message.fatigue, s.fatigueSettings || emptyFatigueSettings()) : [];
@@ -133,19 +158,14 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       }
       case 'local': {
         const s = await read();
-        return { configured: !!s.config, url: s.config?.url || '', queued: s.queue.length,
-          lastSync: s.lastSync, lastError: s.lastError, blocked: !!s.blocked,
-          recentSent: s.recentSent || [], pending: s.queue.slice(-20).map(o => ({
-            session: o.session, seq: o.seq, epoch: s.play?.ticket?.epoch, generation: s.play?.ticket?.generation, events: o.events, errors: o.errors
-          })),
-          pendingManual: s.pendingManual || null, fatigueSettings: s.fatigueSettings || emptyFatigueSettings(),
-          fatigue: fatigueEvents(s.fatigueSnapshot, s.fatigueSettings || emptyFatigueSettings()),
-          akashi: s.akashi || [], fatigueSnapshot: s.fatigueSnapshot || null, testMode: !!s.testMode,
-          hideBuildName: !!s.hideBuildName,
-          errors: s.errors, cache: s.remoteCache, collectors: s.collectors || {} };
+        return { ...localView(s), cache: s.remoteCache };
       }
-      case 'remote': {
-        const result = await request('/v2/status'); await save({ remoteCache: result }); return result;
+      case 'notification-settings': {
+        if (!Number.isInteger(message.advanceSec) || message.advanceSec < 0 || message.advanceSec > 3600) throw new Error('invalid_data');
+        const result = await request('/v2/notification-settings', { method: 'POST', body: JSON.stringify({ advanceSec: message.advanceSec }) });
+        if (result.advanceSec !== message.advanceSec) throw new Error('invalid_reply');
+        await save({ notificationAdvanceSec: result.advanceSec });
+        return result;
       }
       case 'manual': {
         const s = await read();
@@ -154,7 +174,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (!c || !['create', 'cancel'].includes(c.action)) throw new Error('invalid_manual');
         const command = c.action === 'cancel' ? { action: 'cancel', id: c.id }
           : { action: 'create', id: crypto.randomUUID(), title: c.title, mode: c.mode, minutes: c.minutes, end: c.end };
-        await save({ pendingManual: command });
+        await save({ pendingManual: { ...command, queuedAt: Date.now() } });
         try { return await sendManual(); }
         catch (e) {
           // 400 means it was rejected, not an ambiguous network outcome.
@@ -181,7 +201,7 @@ async function init() {
     await chrome.storage.local.remove(['held', 'clockServerTime', 'collectors', 'lastResults', 'recentSent', 'remoteCache']);
     await save({ protocol: 2, play: null, queue: [], attempt: 0, retryPending: false, blocked: false, lastError: '' });
     await chrome.alarms.clear('retry');
-  } else if (s.play && !s.play.retired && !s.blocked && s.play.ticket && s.queue.length
+  } else if (s.play && !s.play.retired && !s.blocked && s.queue.length
     && !await chrome.alarms.get('retry')) await chrome.alarms.create('retry', { delayInMinutes: 1 });
 }
 chrome.runtime.onInstalled.addListener(() => exclusive(init));

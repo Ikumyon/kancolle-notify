@@ -87,3 +87,6 @@ ehthumbs.db
 .idea/
 *.swp
 *~
+desktop/dist/
+desktop/build/
+tests/
