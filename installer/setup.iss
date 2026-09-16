@@ -1,8 +1,8 @@
-﻿; Inno Setup 6 Script for kancolle-notify (Online Installer)
+; Inno Setup 6 Script for kancolle-notify (Online Installer)
 ; プログラム本体を内蔵せず、実行時に GitHub から最新資材を自動ダウンロードしてセットアップします。
 
 #define MyAppName "艦これ通知"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "0.9.1-beta"
 #define MyAppPublisher "kancolle-notify"
 #define MyAppURL "https://github.com/Ikumyon/kancolle-notify"
 #define MyAppExeName "kancolle-gui.exe"

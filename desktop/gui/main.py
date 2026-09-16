@@ -190,7 +190,7 @@ class TimetableWindow(QWidget):
         self.refresh_daemon_status()
 
     def init_ui(self):
-        self.setWindowTitle("艦これ 通知管理")
+        self.setWindowTitle("艦これ 通知管理 v0.9.1-beta")
         self.resize(850, 480)
         self.setMinimumSize(700, 360)
 
