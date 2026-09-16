@@ -33,6 +33,14 @@ done
 CF_API_TOKEN="${1:-$CF_API_TOKEN}"
 DISCORD_WEBHOOK="${2:-$DISCORD_WEBHOOK}"
 
+DEFAULT_INSTALL_DIR="$(pwd)/kancolle-notify"
+if [ -z "$INSTALL_DIR" ]; then
+    echo "インストール先ディレクトリ [デフォルト: ${DEFAULT_INSTALL_DIR}]:"
+    read -r -p "> " USER_INPUT_DIR
+    INSTALL_DIR="${USER_INPUT_DIR:-$DEFAULT_INSTALL_DIR}"
+    echo ""
+fi
+
 if [ -z "$CF_API_TOKEN" ]; then
     echo "Cloudflare の API トークンを入力してください（Workers/D1 の編集権限が必要）:"
     read -r -p "> " CF_API_TOKEN

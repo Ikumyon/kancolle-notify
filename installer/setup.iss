@@ -15,7 +15,8 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={localappdata}\kancolle-notify
+DefaultDirName={src}\kancolle-notify
+DisableDirPage=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist-installer
@@ -44,6 +45,7 @@ Name: "{autodesktop}\{#MyAppName} 管理"; Filename: "{app}\desktop\{#MyAppExeNa
 
 [Run]
 Filename: "{app}\desktop\{#MyAppExeName}"; Description: "{#MyAppName} を起動する"; Flags: postinstall nowait skipifsilent
+Filename: "explorer.exe"; Parameters: """{app}\extension"""; Description: "拡張機能フォルダをエクスプローラーで開く"; Flags: postinstall nowait skipifsilent unchecked
 
 [Code]
 var
