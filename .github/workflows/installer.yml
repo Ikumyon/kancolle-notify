@@ -2,180 +2,173 @@ name: Build and Release (Windows & Linux)
 
 on:
   push:
-    tags:
-      - '*'
+    tags: ['*']
   release:
     types: [published]
+  # ブランチ指定は成果物の作成のみ。タグ指定ではそのタグへ公開する。
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-windows:
-    name: Build Windows Binaries & Installer
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build Daemon (Windows)
+  build:
+    name: Build ${{ matrix.platform }} Binaries & Package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows
+            os: windows-2022
+            suffix: .exe
+            artifact: windows-assets
+          - platform: Linux
+            os: ubuntu-24.04
+            suffix: ''
+            artifact: linux-assets
+    defaults:
+      run:
         shell: bash
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+
+      - name: Validate build inputs
         run: |
-          cd desktop/daemon
-          cargo build --release
-          mkdir -p ../dist
-          cp target/release/kancolle-daemon.exe ../dist/
+          for file in requirements.txt desktop/daemon/Cargo.lock desktop/kancolle-gui.spec desktop/gui/main.py desktop/icon.ico; do
+            if [ ! -f "$file" ]; then
+              echo "::error file=$file::Required build input is missing from this ref: $file"
+              exit 1
+            fi
+          done
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
+          architecture: x64
+          # pip キャッシュの依存ファイル自動探索には依存しない。
 
-      - name: Install Python Dependencies
+      - name: Install Python dependencies if missing
         run: |
-          python -m pip install --upgrade pip
-          pip install PySide6 pyinstaller
+          if ! python -c "import PySide6, PyInstaller"; then
+            python -m pip install -r requirements.txt
+          fi
+          python -m pip check
 
-      - name: Build GUI (Windows)
-        shell: bash
-        run: |
-          cd desktop
-          pyinstaller kancolle-gui.spec --noconfirm
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Bundle Worker Script
-        run: npm run bundle:worker
-
-      - name: Install Inno Setup
-        run: choco install innosetup --yes --no-progress
-
-      - name: Compile Installer with Inno Setup
-        shell: powershell
-        run: |
-          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          if (!(Test-Path $iscc)) {
-            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
-          }
-          if (!(Test-Path $iscc)) {
-            $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
-          }
-          Write-Host "Using ISCC: $iscc"
-          & $iscc installer/setup.iss
-
-      - name: Upload Windows Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-assets
-          path: |
-            dist-installer/kancolle-notify-setup.exe
-            desktop/dist/kancolle-daemon.exe
-            desktop/dist/kancolle-gui.exe
-
-  build-linux:
-    name: Build Linux Binaries & Package
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Linux Dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config libgl1 libegl1 libxkbcommon-x11-0
+          sudo apt-get install -y libdbus-1-dev pkg-config libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Daemon (Linux)
+      - name: Build daemon
+        working-directory: desktop/daemon
+        run: cargo build --release --locked
+
+      - name: Build GUI
+        working-directory: desktop
+        run: python -m PyInstaller kancolle-gui.spec --noconfirm
+
+      - name: Collect binaries
+        env:
+          BINARY_SUFFIX: ${{ matrix.suffix }}
         run: |
-          cd desktop/daemon
-          cargo build --release
-          mkdir -p ../dist
-          cp target/release/kancolle-daemon ../dist/
+          mkdir -p release-files
+          cp "desktop/daemon/target/release/kancolle-daemon${BINARY_SUFFIX}" release-files/
+          cp "desktop/dist/kancolle-gui${BINARY_SUFFIX}" release-files/
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Python Dependencies
+      - name: Compile Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          python3 -m pip install --upgrade pip
-          pip install PySide6 pyinstaller
+          $ErrorActionPreference = 'Stop'
+          $compilerPaths = @(
+            'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+            'C:\Program Files\Inno Setup 6\ISCC.exe',
+            (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          )
+          if (!($compilerPaths | Where-Object { $_ -and (Test-Path -LiteralPath $_) })) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & ./installer/build-installer.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath dist-installer/kancolle-notify-setup.exe -Destination release-files/
 
-      - name: Build GUI (Linux)
-        run: |
-          cd desktop
-          pyinstaller kancolle-gui.spec --noconfirm
-
-      - name: Package Linux Bundle (.tar.gz)
+      - name: Package Linux bundle
+        if: runner.os == 'Linux'
         run: |
           mkdir -p release-pkg/kancolle-notify
-          cp desktop/dist/kancolle-daemon release-pkg/kancolle-notify/
-          cp desktop/dist/kancolle-gui release-pkg/kancolle-notify/
-          cp desktop/start-daemon.sh release-pkg/kancolle-notify/
-          cp desktop/stop-daemon.sh release-pkg/kancolle-notify/
-          cp desktop/start-gui.sh release-pkg/kancolle-notify/
+          cp release-files/kancolle-daemon release-files/kancolle-gui release-pkg/kancolle-notify/
+          cp desktop/start-daemon.sh desktop/stop-daemon.sh desktop/start-gui.sh release-pkg/kancolle-notify/
           cp -r extension release-pkg/kancolle-notify/
           chmod +x release-pkg/kancolle-notify/kancolle-daemon release-pkg/kancolle-notify/kancolle-gui release-pkg/kancolle-notify/*.sh
-          cd release-pkg
-          tar -czvf ../kancolle-notify-linux-x64.tar.gz kancolle-notify
-          cd ..
-          cp desktop/dist/kancolle-daemon ./kancolle-daemon-linux
-          cp desktop/dist/kancolle-gui ./kancolle-gui-linux
+          tar -czf release-files/kancolle-notify-linux-x64.tar.gz -C release-pkg kancolle-notify
+          mv release-files/kancolle-daemon release-files/kancolle-daemon-linux
+          mv release-files/kancolle-gui release-files/kancolle-gui-linux
+          cp installer/install.sh release-files/
 
-      - name: Upload Linux Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Verify package contents
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          if [ "$PLATFORM" = Windows ]; then
+            files=(kancolle-notify-setup.exe kancolle-daemon.exe kancolle-gui.exe)
+          else
+            files=(kancolle-notify-linux-x64.tar.gz kancolle-daemon-linux kancolle-gui-linux install.sh)
+          fi
+          for file in "${files[@]}"; do
+            if [ ! -s "release-files/$file" ]; then
+              echo "::error::Release asset is missing or empty: $file"
+              exit 1
+            fi
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
         with:
-          name: linux-assets
-          path: |
-            kancolle-notify-linux-x64.tar.gz
-            kancolle-daemon-linux
-            kancolle-gui-linux
+          name: ${{ matrix.artifact }}
+          path: release-files/
+          if-no-files-found: error
 
   publish-release:
     name: Publish Release Assets
-    needs: [build-windows, build-linux]
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
         with:
+          pattern: '*-assets'
+          merge-multiple: true
           path: release-files
 
-      - name: Prepare Release Files
-        run: |
-          mkdir -p dist-all
-          find release-files -type f -exec cp {} dist-all/ \;
-          cp installer/install.sh dist-all/install.sh
-          ls -la dist-all/
-
-      - name: Create or Update GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.9.1_beta' }}
-          files: |
-            dist-all/kancolle-notify-setup.exe
-            dist-all/kancolle-daemon.exe
-            dist-all/kancolle-gui.exe
-            dist-all/install.sh
-            dist-all/kancolle-notify-linux-x64.tar.gz
-            dist-all/kancolle-daemon-linux
-            dist-all/kancolle-gui-linux
+      - name: Create or update the matching release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          files=(kancolle-notify-setup.exe kancolle-daemon.exe kancolle-gui.exe install.sh kancolle-notify-linux-x64.tar.gz kancolle-daemon-linux kancolle-gui-linux)
+          for file in "${files[@]}"; do
+            test -s "release-files/$file" || { echo "::error::Missing release asset: $file"; exit 1; }
+          done
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" release-files/* --clobber

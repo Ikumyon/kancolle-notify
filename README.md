@@ -1,5 +1,7 @@
 # kancolle-notify 艦これ通知システム
 
+[通知・オーバーレイ・関連ツールの配布・導入ガイド](docs/index.html)
+
 <p align="center">
   <strong>ゼロ・トラフィック設計の受動監視拡張機能 × Cloudflare Workers × デスクトップ常駐通知</strong><br>
   PCを閉じても、遠征帰投・入渠修復・泊地修理・疲労回復を確実に通知します。
