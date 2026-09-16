@@ -1,72 +1,29 @@
-<!doctype html><html lang="ja"><meta charset="utf-8"><title>通知の設定</title>
-<link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
-<link rel="stylesheet" href="ui.css">
-<body class="settings-page">
-<header class="settings-header">
-  <div class="settings-title-area">
-    <h1><i class="fa-solid fa-gear"></i> 通知の設定</h1>
-    <p class="muted">取得中はゲームタブのDevToolsを開いてください。同期後はゲームやPCを終了できます。</p>
-  </div>
-  <nav class="settings-nav">
-    <a class="button secondary" href="panel.html" target="_blank"><i class="fa-solid fa-clock-rotate-left"></i> 予約と履歴</a>
-  </nav>
-</header>
-
-<div class="settings-container">
-  <section class="settings-card">
-    <h2><i class="fa-solid fa-server"></i> 中央サービスへの接続</h2>
-    <div id="test-mode-box" class="test-mode-box">
-      <label class="checkbox-label"><input id="test-mode" type="checkbox"> <strong>テストモード（ローカル疑似環境に接続）</strong></label>
-      <p class="muted test-mode-note">ローカルの疑似サーバー（<code>http://127.0.0.1:8787</code>）へ固定接続します。本番URLやトークンは保持され、OFFにすると元に戻ります。</p>
-    </div>
-    <form id="settings">
-      <label>中央サービスURL<input id="url" type="url" required placeholder="https://kancolle-notify.example.workers.dev"></label>
-      <label>この端末の接続トークン<input id="token" type="password" required autocomplete="off" minlength="32"></label>
-      <div class="settings-action-row">
-        <button type="submit"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
-      </div>
-    </form>
-    <div class="connection-status-box" aria-live="polite">
-      <p id="saved-state">保存状態を確認中…</p>
-      <p id="connection-state">送信時に接続します</p>
-    </div>
-    <p id="notice" role="status"></p>
-  </section>
-
-  <section class="settings-card">
-    <h2><i class="fa-solid fa-eye-slash"></i> 表示設定</h2>
-    <div class="setting-item">
-      <label class="checkbox-label"><input id="hide-build-name" type="checkbox"> <strong>建造中の艦名を隠す（ネタバレ防止）</strong></label>
-      <p class="muted setting-desc">ONにすると、ポップアップの建造ドックで艦名を表示せず「建造中」（完了時は「完成」）と表示します。</p>
-      <p id="display-notice" role="status" class="good"></p>
-    </div>
-  </section>
-
-  <section class="settings-card">
-    <h2>通知時刻の調整</h2>
-    <form id="notification-settings">
-      <label>通知時刻のオフセット（秒数）<input id="notification-advance" type="number" min="-3600" max="3600" step="1" value="0" required></label>
-      <p class="muted setting-desc">マイナスで早める（例: -59で59秒前）、プラスで遅くする（例: 60で1分後）、0で定刻通知。遠征・入渠・疲労回復・泊地修理に適用します。</p>
-      <p class="muted setting-desc">設定は中央サーバーで一元管理されます。画面を開くと現在の中央設定が表示されます。</p>
-      <button type="submit">中央へ保存</button><p id="notification-notice" role="status"></p>
-    </form>
-  </section>
-  <section class="settings-card">
-    <h2><i class="fa-solid fa-battery-half"></i> 疲労回復の目標値</h2>
-    <form id="fatigue-settings">
-      <p class="muted setting-desc">ポップアップで選べる数字と既定値を、この端末で設定します。艦隊ごとに選択できます。</p>
-      <label>選択肢（0～100の整数をカンマで区切る・最大12件）<input id="fatigue-presets" autocomplete="off"></label>
-      <label>既定値<select id="fatigue-default"><option value="">未設定</option></select></label>
-      <p class="muted setting-desc">数値が大きいほど疲労が少ない状態です。設定できる数値と、時間経過で回復できる上限は異なります。</p>
-      <div class="settings-action-row">
-        <button type="submit"><i class="fa-solid fa-floppy-disk"></i> 目標値を保存</button>
-      </div>
-      <p id="fatigue-notice" role="status"></p>
-    </form>
-  </section>
-</div>
-
-<footer class="settings-footer">
-  <p class="muted">TelegramのBotトークンは中央側で設定します。表示は日本時間、履歴は30日保存します。</p>
-</footer>
-<script type="module" src="settings.js"></script><script type="module" src="fatigue-settings.js"></script><script type="module" src="notification-settings.js"></script></body></html>
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>艦これ 設定・手動予約</title><link rel="stylesheet" href="ui.css"></head>
+<body class="observation-page settings-page"><header><h1>設定・手動予約</h1><a href="panel.html">観測・送信へ</a><p id="notice" role="status"></p></header>
+<main><section><h2>接続情報</h2><form id="connection-form">
+<label>中央サーバーURL<input id="url" type="url" required placeholder="https://example.workers.dev"></label>
+<label>デバイストークン<input id="token" type="password" required autocomplete="off" minlength="32"></label>
+<button>接続情報を保存</button></form></section>
+<section><h2>拡張の回復計算設定</h2><form id="calculation-form"><label>疲労の目標cond<input id="fatigue-target" type="number" min="0" max="49" step="1" required></label>
+<label>ポップアップの目標cond選択肢（カンマ区切り）<input id="fatigue-presets" placeholder="40,49" required></label>
+<p class="muted">0〜49の整数を12件まで登録できます。艦隊ごとの目標はポップアップで選択します。</p>
+<button>拡張へ保存</button></form></section>
+<section><h2>通知設定</h2><button id="reload-settings" type="button">中央から再取得</button>
+<form id="settings-form"><fieldset id="settings-fields" disabled>
+<label>通知オフセット（秒）<input id="offset" type="number" min="-3600" max="3600" step="1" required></label>
+<label><input id="hide-build" type="checkbox">建造艦名を隠す</label>
+<fieldset><legend>通知先</legend><label><input type="checkbox" data-provider="discord">Discord</label>
+<label><input type="checkbox" data-provider="telegram">Telegram</label></fieldset>
+<fieldset><legend>通知カテゴリ</legend><label><input type="checkbox" data-category="expedition">遠征</label>
+<label><input type="checkbox" data-category="repair">入渠</label><label><input type="checkbox" data-category="build">建造</label>
+<label><input type="checkbox" data-category="akashi">泊地修理</label><label><input type="checkbox" data-category="fatigue">疲労</label></fieldset>
+<button>中央へ保存</button></fieldset></form></section>
+<section><h2>手動予約</h2><form id="manual-form"><label>予約名<input id="manual-name" maxlength="80" required></label>
+<label>指定方法<select id="manual-mode"><option value="minutes">指定分数後</option><option value="absolute">日時指定（日本時間）</option></select></label>
+<label id="minutes-label">何分後<input id="minutes" type="number" min="1" max="525600" step="1" value="10" required></label>
+<label id="absolute-label" hidden>日時<input id="absolute" type="datetime-local" step="1"></label>
+<button>予約する</button></form>
+<button id="reload-manual" type="button">予約一覧を更新</button><div id="manual-list"></div></section></main>
+<script type="module" src="settings.js"></script></body></html>

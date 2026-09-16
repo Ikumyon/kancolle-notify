@@ -89,5 +89,5 @@ ehthumbs.db
 *~
 desktop/dist/
 desktop/build/
-tests/
-docs/
+docs/*
+!docs/*.md

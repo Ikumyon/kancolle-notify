@@ -5,16 +5,16 @@
 <header class="popup-header">
   <div class="popup-title-bar">
     <h1>艦これ 終了予定通知 <span id="mode-badge" class="badge-test" hidden>テストモード</span></h1>
-    <p id="notice" role="status">保存データを読み込み中…</p>
+    <p id="notice" role="status">観測情報を読み込み中…</p>
   </div>
   <div class="popup-controls">
     <nav class="popup-nav">
-      <a class="button" href="panel.html" target="_blank"><i class="fa-solid fa-clock-rotate-left"></i> 予約と履歴</a>
+      <a class="button" href="panel.html" target="_blank"><i class="fa-solid fa-clock-rotate-left"></i> 送信内容・履歴</a>
       <a class="button" href="settings.html" target="_blank"><i class="fa-solid fa-gear"></i> 設定</a>
     </nav>
     <div id="time-mode" class="segments" role="group" aria-label="予定時刻の表示">
-      <button type="button" data-mode="remaining" aria-pressed="false"><i class="fa-solid fa-hourglass-half"></i> あと何分</button>
-      <button type="button" data-mode="absolute" aria-pressed="true"><i class="fa-regular fa-clock"></i> 何時に</button>
+      <button type="button" data-mode="remaining" aria-pressed="true"><i class="fa-solid fa-hourglass-half"></i> あと何分</button>
+      <button type="button" data-mode="absolute" aria-pressed="false"><i class="fa-regular fa-clock"></i> 何時に</button>
     </div>
   </div>
 </header>
@@ -67,24 +67,11 @@
     </div>
   </section>
   <section class="manual-section">
-    <h2><i class="fa-solid fa-bell"></i> 手動通知</h2>
-    <form id="manual-form">
-      <div class="manual-row">
-        <input id="manual-title" maxlength="80" required placeholder="通知名（例：30分後）">
-      </div>
-      <div class="manual-row">
-        <select id="manual-mode"><option value="minutes">何分後</option><option value="datetime">日時指定</option></select>
-      </div>
-      <div class="manual-row" id="minutes-field">
-        <input id="manual-minutes" type="number" min="1" max="525600" value="30" required placeholder="分">
-      </div>
-      <div class="manual-row" id="datetime-field" hidden>
-        <input id="manual-datetime" type="datetime-local">
-      </div>
-      <button id="manual-submit" type="submit"><i class="fa-solid fa-plus"></i> 予約する</button>
-    </form>
-    <p id="manual-notice" role="status"></p><button id="manual-retry" hidden>確認・再送</button>
-    <div id="manual-reservations"></div>
+    <h2><i class="fa-solid fa-bell"></i> 予約・送信</h2>
+    <p class="muted">予約の登録・取消と送信の詳細は専用ページで確認できます。</p>
+    <p><a class="button" href="settings.html" target="_blank">設定・手動予約</a></p>
+    <p><a class="button secondary" href="panel.html" target="_blank">送信内容・履歴</a></p>
+    <p id="send-summary" class="muted"></p><p id="settings-notice" class="muted" role="status"></p>
   </section>
 </div>
 <script type="module" src="ui-entry.js"></script></body></html>

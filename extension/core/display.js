@@ -1,33 +1,9 @@
-export const MIN_REPAIR = 1200000;
-const minute = n => Math.ceil(n / 60000) * 60000;
-
-export function repairProgress(ship, start, now) {
-  const missing = ship.max - ship.hp;
-  const tick = Math.ceil(minute((ship.repair - 30000) * ship.mod) / missing);
-  const end = start + (missing === 1 ? MIN_REPAIR : Math.max(MIN_REPAIR, minute(tick * missing)));
-  const elapsed = now - start;
-  const healed = elapsed < MIN_REPAIR ? 0 : Math.min(missing, Math.max(1, Math.floor(Math.floor(elapsed / 60000) * 60000 / tick)));
-  return { hp: ship.hp + healed, healed, end };
+export const time = value => Number.isFinite(value) && value > 0 ? new Intl.DateTimeFormat('ja-JP', {
+  timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+}).format(value) : '未観測';
+export function remainingText(endAt, now) {
+  if (!Number.isFinite(endAt) || !Number.isFinite(now)) return '未観測';
+  const seconds = Math.max(0, Math.ceil((endAt - now) / 1000));
+  return Math.floor(seconds / 3600) + '時間 ' + Math.floor(seconds % 3600 / 60) + '分 ' + seconds % 60 + '秒';
 }
-
-export function repairLine(ship, start, now) {
-  const p = repairProgress(ship, start, now);
-  const day = n => new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(n);
-  const clock = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' }).format(p.end);
-  return `${ship.name}: ${ship.hp}->${p.hp} +${p.healed}　${now >= p.end ? '全回復' : `あと${Math.ceil((p.end - now) / 60000)}分　${day(now) === day(p.end) ? '' : day(p.end) + ' '}${clock}`}`;
-}
-
-export const isNotified = r => r.kind === 'akashi' ? !!r.repair && ['start', ...r.repair.ships.map(s => String(s.id))].every(id => (r.repairSent || []).includes(id)) : !!r.sent && r.sent.generation === r.generation;
-export const visibleReservation = r => ['active', 'pending'].includes(r.state) && !isNotified(r);
-
-// 艦隊の出撃状態は、通知の送信済み・未送信とは別に表示する。
-export function expeditionFor(local, fleet) {
-  const key = `expedition:${fleet}`;
-  return local?.localSlots?.[key] || null;
-}
-
-export function remainingText(end, now) {
-  if (!Number.isFinite(end) || !Number.isFinite(now)) return '時刻未取得';
-  if (end <= now) return '予定時刻到達';
-  return `あと${Math.ceil((end - now) / 60000)}分`;
-}
+export const statusLabels = { queued: '送信待ち', sending: '送信中', sent: '送信済み', retry: '再送待ち', stopped: '送信停止' };

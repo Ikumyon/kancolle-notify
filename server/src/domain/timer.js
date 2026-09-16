@@ -1,51 +1,29 @@
-import { MIN_REPAIR, repairProgress } from './akashi.js';
-
-export function getOffsetSec(state) {
-  if (Number.isInteger(state.offsetSec) && state.offsetSec !== 0) return state.offsetSec;
-  // 後方互換性: 旧 notificationAdvanceSec (正の数で早める) を負のオフセットとして扱う
-  if (Number.isInteger(state.notificationAdvanceSec) && state.notificationAdvanceSec > 0) {
-    return -state.notificationAdvanceSec;
-  }
-  return state.offsetSec || 0;
+export const retryDelay = attempt => Math.min(300000, 1000 * 2 ** Math.min(attempt, 8));
+export function targetDeliveryTime(timer, offsetSec) {
+  if (timer.state !== 'active' || !Number.isSafeInteger(timer.endAt)) return null;
+  return timer.endAt + (timer.kind === 'manual' ? 0 : offsetSec * 1000);
 }
-
-export function targetDeliveryTime(slot, offsetSec) {
-  if (!slot || slot.state !== 'active' || !Number.isSafeInteger(slot.end)) return null;
-  // 建造や手動予約はオフセット調整の対象外（定刻通り）
-  if (slot.kind === 'build' || slot.kind === 'manual') return slot.end;
-  return slot.end + offsetSec * 1000;
-}
-
-export function nextDeliveryAt(state, now, claimDeliveryFn) {
-  if (state.authBlocked) return null;
-  if (claimDeliveryFn) {
-    const s = structuredClone(state);
-    if (claimDeliveryFn(s, now, 'alarm-preview')) return now;
-  }
-  if (state.delivery) {
-    return Math.max(now, state.delivery.nextTry || 0, state.delivery.leaseUntil || 0);
-  }
-
-  const offsetSec = getOffsetSec(state);
+export function nextDeliveryAt(state, now) {
   const times = [];
-
-  for (const r of Object.values(state.slots || {})) {
-    if (r.state !== 'active') continue;
-    if (r.kind === 'akashi' && r.repair) {
-      const sent = r.repairSent || [];
-      const offsetMs = offsetSec * 1000;
-      if (!sent.includes('start')) times.push(r.repair.start + MIN_REPAIR + offsetMs);
-      for (const ship of r.repair.ships) {
-        if (!sent.includes(String(ship.id))) {
-          times.push(repairProgress(ship, r.repair.start, now).end + offsetMs);
-        }
+  for (const delivery of Object.values(state.deliveries)) {
+    if (!state.settings.providers[delivery.provider] || delivery.status === 'sent' || delivery.status === 'failed' || delivery.status === 'cancelled') continue;
+    times.push(Math.max(delivery.dueAt, delivery.nextTryAt || 0, delivery.leaseUntil || 0));
+  }
+  for (const timer of Object.values(state.timers)) {
+    if (timer.state !== 'active') continue;
+    for (const event of timer.events || []) {
+      if (!Number.isSafeInteger(event.endAt)) continue;
+      const dueAt = event.endAt + (timer.kind === 'manual' ? 0 : state.settings.offsetSec * 1000);
+      if (dueAt > now - 60000) {
+        times.push(dueAt);
       }
-    } else if (!(r.sent && r.sent.generation === r.generation)) {
-      const t = targetDeliveryTime(r, offsetSec);
-      if (t !== null) times.push(t);
     }
   }
+  return times.length ? Math.max(now, Math.min(...times)) : null;
+}
 
-  const valid = times.filter(Number.isSafeInteger);
-  return valid.length ? Math.max(now, Math.min(...valid)) : null;
+export function publicTimer(timer, settings, now) {
+  const copy = structuredClone(timer);
+  if (copy.kind === 'build' && settings.hideBuildName) { copy.name = ''; }
+  return copy;
 }

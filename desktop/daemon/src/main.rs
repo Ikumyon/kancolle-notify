@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-use timer::check_and_notify;
+use timer::handle_notify_event;
 
 fn print_usage() {
     println!("艦これ 超軽量常駐通知デーモン (kancolle-daemon)");
@@ -25,7 +25,8 @@ fn print_usage() {
     println!("  run                     フォアグラウンドで常駐実行（ログをコンソール出力）");
     println!("  start                   バックグラウンドで常駐開始（不可視プロセス）");
     println!("  stop                    バックグラウンドの常駐プロセスを安全に停止");
-    println!("  status                  現在の常駐状態と監視スロットをJSONで出力");
+    println!("  status                  現在の常駐状態と監視タイマーをJSONで出力");
+    println!("  offset [SEC]            中央の通知オフセット時間を表示または変更 (例: offset -60)");
     println!("  test                    デスクトップ通知の動作テストを実行");
     println!("  autostart [CMD]         PC起動時の自動起動を管理 (status | enable | disable)");
     println!("  config [CMD]            設定の一覧表示および変更 (list | set <key> <val> | --json)");
@@ -57,20 +58,25 @@ fn run_loop() {
 
     let config = load_config();
     println!("[INFO] Target Server: {}", config.server_url);
-    println!("[INFO] Poll Interval: {}s", config.poll_interval_sec);
+    println!("[INFO] Listening for push notifications (SSE)...");
 
     while running.load(Ordering::SeqCst) {
-        let cfg = load_config(); // 毎ループ設定リロード
-        if let Err(e) = check_and_notify(&cfg, &mut state) {
-            eprintln!("[WARN] Check failed: {}", e);
-        }
-
-        // 短いスパン（1秒）でスリープしつつ停止要求を即座に感知
-        for _ in 0..cfg.poll_interval_sec {
-            if !running.load(Ordering::SeqCst) {
-                break;
+        let cfg = load_config();
+        let r_flag = running.clone();
+        let listen_res = client::listen_events(&cfg, |event| {
+            if !r_flag.load(Ordering::SeqCst) {
+                return;
             }
-            thread::sleep(Duration::from_secs(1));
+            if let Err(err) = handle_notify_event(&cfg, &event) {
+                eprintln!("[ERROR] Notification failed: {}", err);
+            }
+        });
+
+        if let Err(e) = listen_res {
+            if running.load(Ordering::SeqCst) {
+                eprintln!("[WARN] Event stream disconnected: {}. Reconnecting in 3s...", e);
+                thread::sleep(Duration::from_secs(3));
+            }
         }
     }
 
@@ -93,6 +99,57 @@ fn cmd_status() {
 
     let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
     println!("{}", json);
+}
+
+fn cmd_offset(args: &[String]) {
+    let cfg = load_config();
+    let is_json = args.iter().any(|a| a == "--json");
+    let sec_arg = args.get(2).filter(|s| *s != "--json");
+
+    match sec_arg {
+        Some(sec_str) => {
+            let sec = match sec_str.parse::<i64>() {
+                Ok(s) if (-3600..=3600).contains(&s) => s,
+                _ => {
+                    eprintln!("[ERROR] オフセット秒数は -3600 〜 3600 の整数で指定してください。");
+                    std::process::exit(1);
+                }
+            };
+            match client::patch_offset(&cfg, sec) {
+                Ok(settings) => {
+                    if is_json {
+                        println!("{}", serde_json::json!({ "offsetSec": settings.offset_sec, "ok": true }));
+                    } else {
+                        println!("[SUCCESS] 中央の通知オフセットを {}秒 に設定しました。", settings.offset_sec);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[ERROR] 中央のオフセット変更に失敗しました: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            match client::fetch_status(&cfg) {
+                Ok(status) => {
+                    if is_json {
+                        println!("{}", serde_json::json!({ "offsetSec": status.settings.offset_sec }));
+                    } else {
+                        println!("中央の通知オフセット: {}秒", status.settings.offset_sec);
+                    }
+                }
+                Err(e) => {
+                    // 通信失敗時は最後に保存されたstateから返す
+                    let state = load_state();
+                    if is_json {
+                        println!("{}", serde_json::json!({ "offsetSec": state.offset_sec, "warning": e }));
+                    } else {
+                        println!("中央の通知オフセット (キャッシュ): {}秒 (取得エラー: {})", state.offset_sec, e);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn cmd_autostart(args: &[String]) {
@@ -143,8 +200,6 @@ fn print_config_pretty(cfg: &config::Config) {
     println!("========================================");
     println!("  サーバーURL       : {}", cfg.server_url);
     println!("  端末トークン       : {}", token_display);
-    println!("  確認間隔           : {}秒", cfg.poll_interval_sec);
-    println!("  事前通知タイミング : {}秒前 (0=ジャスト)", cfg.notify_advance_sec);
     println!("  サウンド通知       : {}", if cfg.play_sound { "有効 (true)" } else { "無効 (false)" });
     println!("  自動起動 (OS常駐)  : {}", if autostart { "有効 (true)" } else { "無効 (false)" });
     println!("========================================");
@@ -159,7 +214,7 @@ fn cmd_config(args: &[String]) {
             let val = args.get(4).map(|s| s.as_str()).unwrap_or("");
             if key.is_empty() || val.is_empty() {
                 eprintln!("使用法: kancolle-daemon config set <KEY> <VALUE>");
-                eprintln!("使用可能なキー: server_url, token, poll_interval, notify_advance, play_sound");
+                eprintln!("使用可能なキー: server_url, token, play_sound");
                 std::process::exit(1);
             }
             match config::set_value(key, val) {
@@ -228,6 +283,7 @@ fn main() {
             }
         },
         "status" => cmd_status(),
+        "offset" => cmd_offset(&args),
         "autostart" => cmd_autostart(&args),
         "config" => cmd_config(&args),
         "test" => {

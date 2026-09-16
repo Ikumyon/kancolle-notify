@@ -1,210 +1,243 @@
+import { extract } from './core/parser.js';
 import { retryDelay } from './core/retry.js';
-import { eventKey, eventSignature } from './core/generation.js';
-import { fatigueEvents, fatigueSettings, emptyFatigueSettings, validTarget } from './core/fatigue.js';
-import { localView } from './core/local.js';
-let serial = Promise.resolve();
-const exclusive = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
-const read = async () => ({ queue: [], errors: [], attempt: 0, retryPending: false, ...(await chrome.storage.local.get(null)) });
-const save = patch => chrome.storage.local.set(patch);
+import { targetFor } from './core/recovery.js';
+import { calculationState, calculate, recompute, timerUpdates } from './core/timers.js';
+import { defaultCalculationSettings, calculationSettings } from './core/calculation-settings.js';
 export function endpoint(value) {
-  const url = new URL(value);
-  const local = ['127.0.0.1', 'localhost'].includes(url.hostname);
-  if (url.username || url.password || url.search || url.hash || !['', '/'].includes(url.pathname)
-    || !(url.protocol === 'https:' && url.hostname.endsWith('.workers.dev') || local && url.protocol === 'http:')) throw new Error('invalid_endpoint');
+  const url = new URL(value), local = ['127.0.0.1', 'localhost'].includes(url.hostname);
+  if (url.username || url.password || url.search || url.hash || !['', '/'].includes(url.pathname) ||
+    !(url.protocol === 'https:' && url.hostname.endsWith('.workers.dev') || local && url.protocol === 'http:')) throw new Error('invalid_endpoint');
   return url.origin;
 }
-async function request(path, options = {}) {
-  const { config } = await read();
-  if (!config?.url || !config.token) throw new Error('not_configured');
-  const origin = endpoint(config.url);
-  // This is the only production network entry point in the extension. Never accepts game URLs.
-  const response = await fetch(origin + path, { ...options, headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
-    redirect: 'error', signal: AbortSignal.timeout(15000), cache: 'no-store', credentials: 'omit' });
-  if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'authentication' : response.status === 400 ? 'invalid_data' : 'connection');
-  const result = await response.json();
-  if (result.state) result.state.cachedAt = Date.now();
-  else if (Number.isFinite(result.now)) result.cachedAt = Date.now();
-  return result;
-}
-async function error(code) {
-  const s = await read();
-  await save({ lastError: code, errors: [...s.errors, { code }].slice(-100) });
-}
-async function sendManual() {
-  try { return await deliverManual(); }
-  catch (e) {
-    const s = await read();
-    if (s.pendingManual) await save({ pendingManual: { ...s.pendingManual, sendError: e.message } });
-    throw e;
+const emptyView = () => ({ timers: {}, updates: [], receipts: {}, observedAt: null, collector: false, error: '', hideBuildName: true });
+export class ObservationBridge {
+  constructor({ storage, fetch: send = (...args) => globalThis.fetch(...args), alarm, broadcast = () => {} }) {
+    this.storage = storage; this.send = send; this.alarm = alarm; this.broadcast = broadcast;
+    this.view = emptyView(); this.settingsCache = null; this.clock = null;
+    this.settingsSerial = Promise.resolve(); this.serial = Promise.resolve(); this.flushing = false;
+    this.ready = storage.get(['connection', 'outbound', 'transport', 'calculationSettings']).then(s => {
+      this.connection = s.connection || null; this.queue = s.outbound || [];
+      this.transport = s.transport || { sources: {}, attempt: 0, blocked: false, events: {}, currentSource: null };
+      this.calculationSettings = calculationSettings(defaultCalculationSettings(), s.calculationSettings || {});
+      this.model = calculationState(this.calculationSettings, this.transport.events);
+      this.game = this.model.game;
+    });
   }
-}
-async function deliverManual() {
-  const s = await read(); if (!s.pendingManual) return { ok: true };
-  const { queuedAt, sendError, ...command } = s.pendingManual;
-  const result = await request('/v2/manual', { method: 'POST', body: JSON.stringify(command) });
-  const r = result.reservation;
-  if (!r || !Number.isFinite(result.now)) throw new Error('invalid_reply');
-  const recentSent = [...(s.recentSent || []), { session: s.pendingManual.id, seq: r.revision,
-    queuedAt, receivedAt: result.now, epoch: null, generation: null,
-    events: [{ kind: 'manual', slot: null, name: r.name, state: r.state, end: r.end, action: s.pendingManual.action }],
-    errors: [], result: { status: result.status } }].slice(-50);
-  const manualSlots = { ...s.manualSlots, [`manual:${s.pendingManual.id}`]: {
-    kind: 'manual', slot: null, name: r.name, state: r.state, end: r.end, action: s.pendingManual.action
-  } };
-  await save({ pendingManual: null, manualSlots, recentSent, lastSync: result.now, remoteCache: result.state });
-  return result;
-}
-async function flush(force = false) {
-  let s = await read();
-  let attempted = [];
-  if (!s.queue.length || !s.config || !s.play || s.play.retired || s.blocked || s.retryPending && !force) return;
-  try {
-    attempted = s.queue.slice(0, 10);
-    if (!s.play.ticket) {
-      const result = await request('/v2/session', { method: 'POST', body: JSON.stringify({ session: s.play.session }) });
-      if (!result.ticket || result.ticket.session !== s.play.session) throw new Error('invalid_reply');
-      s.play.ticket = result.ticket;
-      await save({ play: s.play, remoteCache: result.state });
-    }
-    for (let round = 0; round < 4 && s.queue.length; round++) {
-      attempted = s.queue.slice(0, 10);
-      const batch = attempted.map(o => ({ session: o.session, seq: o.seq, events: o.events, errors: o.errors, ...s.play.ticket }));
-      const result = await request('/v2/observations', { method: 'POST', body: JSON.stringify({ observations: batch }) });
-      if (!Array.isArray(result.results) || result.results.length !== batch.length
-        || !result.results.every((r, i) => r.seq === batch[i].seq)) throw new Error('invalid_reply');
-      if (result.results.some(r => r.status === 'stale_session')) {
-        s.play.retired = true;
-        const rejected = s.queue.map(o => ({ ...o, sendError: 'stale_session', receivedAt: result.now, result: { status: 'stale_session' } }));
-        await save({ play: s.play, queue: [], recentSent: [...(s.recentSent || []), ...rejected].slice(-50), lastError: 'stale_session', retryPending: false, remoteCache: result.state });
-        await chrome.alarms.clear('retry'); return;
+  async exclusive(fn) {
+    const next = this.serial.then(() => this.ready).then(fn);
+    this.serial = next.catch(() => {}); return next;
+  }
+  async persist() {
+    await this.storage.set({ connection: this.connection, outbound: this.queue, transport: this.transport, calculationSettings: this.calculationSettings });
+  }
+  changed() { this.broadcast(); }
+  async request(path, options = {}) {
+    if (!this.connection) throw new Error('not_configured');
+    const response = await this.send(endpoint(this.connection.url) + path, {
+      ...options, headers: { Authorization: 'Bearer ' + this.connection.token, 'Content-Type': 'application/json' },
+      redirect: 'error', credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) throw new Error([401, 403].includes(response.status) ? 'authentication' : [400, 413, 404].includes(response.status) ? 'invalid_data' : 'connection');
+    return response.json();
+  }
+  receipt(id, status, extra = {}) {
+    if (this.view.receipts[id]) Object.assign(this.view.receipts[id], { status }, extra);
+    this.changed();
+  }
+  source(id) {
+    if (!this.transport.sources[id]) this.transport.sources[id] = { requestId: id, sessionId: null, sequence: 0 };
+    return this.transport.sources[id];
+  }
+  async queueTimers(sourceId, reason, observedAt, timers) {
+    if (!timers.length) { await this.persist(); this.changed(); return; }
+    const source = this.source(sourceId), sequence = ++source.sequence, id = sourceId + ':' + sequence;
+    const item = { sourceId, sequence, observedAt, reason, timers };
+    this.view.receipts[id] = { status: 'queued', observedAt, reason };
+    for (const timer of timers) this.view.timers[timer.id] = { data: structuredClone(timer), observationId: id };
+    this.view.updates.unshift({ ...structuredClone(item), observationId: id });
+    this.view.updates = this.view.updates.slice(0, 30);
+    const used = new Set([...Object.values(this.view.timers).map(t => t.observationId), ...this.view.updates.map(u => u.observationId)]);
+    for (const key of Object.keys(this.view.receipts)) if (!used.has(key)) delete this.view.receipts[key];
+    this.changed();
+    if (source.retired) { this.receipt(id, 'stopped', { error: 'stale_session' }); return; }
+    this.queue.push(item);
+    try { await this.persist(); await this.alarm.create('retry', { delayInMinutes: 1 }); }
+    catch { this.receipt(id, 'stopped', { error: 'storage' }); throw new Error('storage'); }
+  }
+  async enqueue(input) {
+    await this.exclusive(async () => {
+      const clean = extract(input.api, input.response, input.request);
+      if (typeof input.sourceId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(input.sourceId) || !Number.isSafeInteger(input.observedAt)) throw new Error('invalid_observation');
+      if (this.transport.currentSource !== input.sourceId) {
+        this.view = { ...emptyView(), collector: this.view.collector, hideBuildName: this.view.hideBuildName };
+        this.model = calculationState(this.calculationSettings, this.transport.events); this.game = this.model.game; this.clock = null;
       }
-      for (const o of batch) for (const e of o.events) s.play.baseline[eventKey(e)] = eventSignature(e);
-      const receipts = batch.map((o, i) => ({ ...o, queuedAt: attempted[i].queuedAt, receivedAt: result.now, result: result.results[i] }));
-      s.recentSent = [...(s.recentSent || []), ...receipts].slice(-50);
-      s.queue = s.queue.slice(batch.length);
-      await save({ play: s.play, queue: s.queue, lastSync: result.now, lastResults: result.results,
-        recentSent: s.recentSent, remoteCache: result.state, lastError: '', attempt: 0, retryPending: false });
-    }
-    await save({ attempt: 0, retryPending: false });
-    if (s.queue.length) await chrome.alarms.create('retry', { delayInMinutes: 1 });
-    else await chrome.alarms.clear('retry');
-  } catch (e) {
-    const blocked = ['authentication', 'invalid_data'].includes(e.message);
-    await error(e.message);
-    const failedSeqs = new Set(attempted.map(o => o.seq));
-    s.queue = s.queue.map(o => failedSeqs.has(o.seq) ? { ...o, sendError: e.message } : o);
-    await save({ queue: s.queue, blocked, attempt: s.attempt + 1, retryPending: !blocked });
-    if (!blocked) await chrome.alarms.create('retry', { delayInMinutes: retryDelay(s.attempt + 1) / 60000 });
+      this.transport.currentSource = input.sourceId; this.source(input.sourceId);
+      const observation = { ...input, ...clean };
+      calculate(this.model, observation);
+      if (input.responseDate) this.clock = { serverAt: input.responseDate, clientAt: input.observedAt };
+      this.view.observedAt = input.observedAt;
+      await this.queueTimers(input.sourceId, 'observation', input.observedAt, await timerUpdates(this.model));
+    });
+    void this.flush(); return { ok: true };
   }
-}
-async function enqueueEvents(s, incoming) {
-  if (incoming.length) {
-    s.localSlots = { ...(s.localSlots || s.expeditionSlots) };
-    for (const e of incoming) s.localSlots[eventKey(e)] = e;
-    await save({ localSlots: s.localSlots });
+  async localSettings(patch) {
+    if (patch === undefined) { await this.ready; return structuredClone(this.calculationSettings); }
+    await this.exclusive(async () => {
+      this.calculationSettings = calculationSettings(this.calculationSettings, patch); this.model.settings = this.calculationSettings;
+      // プリセットの並び替えだけでは予約を変更しない。
+      if (Object.hasOwn(patch, 'fatigueTarget') || Object.hasOwn(patch, 'fatigueTargets')) {
+        recompute(this.model, Date.now(), true);
+        const sourceId = this.transport.currentSource || (this.transport.currentSource = crypto.randomUUID());
+        const affected = Object.hasOwn(patch, 'fatigueTarget') ? [1, 2, 3, 4] : Object.keys(patch.fatigueTargets).map(Number);
+        const updates = await timerUpdates(this.model, 'settings', true);
+        await this.queueTimers(sourceId, 'settings', this.view.observedAt, updates.filter(t => affected.includes(t.slot)));
+      } else { await this.persist(); this.changed(); }
+    });
+    void this.flush(); return structuredClone(this.calculationSettings);
   }
-  if (s.play.retired) return;
-  const known = { ...s.play.baseline };
-  for (const pending of s.queue) for (const e of pending.events) known[eventKey(e)] = eventSignature(e);
-  const events = incoming.filter(e => known[eventKey(e)] !== eventSignature(e));
-  if (!events.length) { if (s.queue.length) await flush(); return; }
-  s.play.seq = (s.play.seq || 0) + 1;
-  s.queue.push({ session: s.play.session, seq: s.play.seq, events, errors: [], queuedAt: Date.now() });
-  await save({ play: s.play, queue: s.queue }); await flush();
-}
-async function refreshFatigue(s) {
-  if (!s.play || !s.fatigueSnapshot) return;
-  await enqueueEvents(s, fatigueEvents(s.fatigueSnapshot, s.fatigueSettings || emptyFatigueSettings()));
-}
-chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return false;
-  exclusive(async () => {
-    switch (message?.type) {
-      case 'begin': {
-        const s = await read();
-        if (s.play?.session !== message.session) {
-          // 比較用の保存内容と未送信分は、DevToolsを開き直しても維持する。
-          const queue = s.queue.map((o, i) => ({ ...o, session: message.session, seq: i + 1 }));
-          await save({ play: { session: message.session, ticket: null, baseline: s.play?.baseline || {}, retired: false, seq: queue.length },
-            queue, blocked: false, retryPending: false, attempt: 0 });
+  async flush() {
+    await this.ready;
+    if (this.flushing || this.transport.blocked || !this.connection || !this.queue.length) return;
+    this.flushing = true;
+    let attempted = [];
+    try {
+      await this.alarm.create('retry', { delayInMinutes: 1 });
+      // ネットワーク待ち中もenqueueと画面更新は継続できる。
+      for (let round = 0; round < 4 && this.queue.length; round++) {
+        const first = this.queue[0], source = this.transport.sources[first.sourceId];
+        attempted = [];
+        for (const item of this.queue) { if (item.sourceId !== first.sourceId || attempted.length === 10) break; attempted.push(item); }
+        if (!source.sessionId) {
+          const result = await this.request('/api/session', { method: 'POST', body: JSON.stringify({ requestId: source.requestId }) });
+          if (typeof result.sessionId !== 'string') throw new Error('invalid_reply');
+          await this.exclusive(async () => { source.sessionId = result.sessionId; await this.persist(); });
         }
-        return { ok: true };
-      }
-      case 'enqueue': {
-        let s = await read(); const o = message.observation;
-        if (!o || !Number.isSafeInteger(o.seq)) throw new Error('invalid_data');
-        if (s.play?.session !== o.session) return { ignored: true };
-        if (o.errors?.length) await error(o.errors.join(','));
-        if (message.fatigue) { s.fatigueSnapshot = message.fatigue; await save({ fatigueSnapshot: message.fatigue }); }
-        const fatigue = message.fatigue ? fatigueEvents(message.fatigue, s.fatigueSettings || emptyFatigueSettings()) : [];
-        if (message.akashi) await save({ akashi: message.akashi });
-        await enqueueEvents(s, [...o.events, ...fatigue, ...(message.akashi || [])]);
-        return { stored: true };
-      }
-      case 'fatigue-settings': {
-        const value = fatigueSettings(message.settings);
-        await save({ fatigueSettings: value }); await refreshFatigue(await read()); return value;
-      }
-      case 'fatigue-target': {
-        const s = await read(), settings = s.fatigueSettings || emptyFatigueSettings();
-        if (![1, 2, 3, 4].includes(message.fleet) || !validTarget(message.target) || !settings.presets.includes(message.target)) throw new Error('invalid_fatigue_settings');
-        settings.fleets[message.fleet] = message.target;
-        await save({ fatigueSettings: settings }); await refreshFatigue(await read()); return settings;
-      }
-      case 'collector': {
-        const { collectors = {} } = await read();
-        collectors[message.session] = { tab: sender.tab?.id ?? message.tab, active: message.active };
-        await save({ collectors: Object.fromEntries(Object.entries(collectors).slice(-20)) }); return { ok: true };
-      }
-      case 'local': {
-        const s = await read();
-        return { ...localView(s), cache: s.remoteCache };
-      }
-      case 'notification-settings': {
-        if (!Number.isInteger(message.advanceSec) || message.advanceSec < 0 || message.advanceSec > 3600) throw new Error('invalid_data');
-        const result = await request('/v2/notification-settings', { method: 'POST', body: JSON.stringify({ advanceSec: message.advanceSec }) });
-        if (result.advanceSec !== message.advanceSec) throw new Error('invalid_reply');
-        await save({ notificationAdvanceSec: result.advanceSec });
-        return result;
-      }
-      case 'manual': {
-        const s = await read();
-        if (s.pendingManual) throw new Error('manual_pending');
-        const c = message.command;
-        if (!c || !['create', 'cancel'].includes(c.action)) throw new Error('invalid_manual');
-        const command = c.action === 'cancel' ? { action: 'cancel', id: c.id }
-          : { action: 'create', id: crypto.randomUUID(), title: c.title, mode: c.mode, minutes: c.minutes, end: c.end };
-        await save({ pendingManual: { ...command, queuedAt: Date.now() } });
-        try { return await sendManual(); }
-        catch (e) {
-          // 400 means it was rejected, not an ambiguous network outcome.
-          if (e.message === 'invalid_data') await save({ pendingManual: null });
-          throw e;
+        const updates = [];
+        for (const { sourceId, ...item } of attempted) {
+          const candidate = { sessionId: source.sessionId, ...item };
+          if (new TextEncoder().encode(JSON.stringify({ updates: [...updates, candidate] })).byteLength > 2097152) {
+            if (!updates.length) throw new Error('invalid_data');
+            break;
+          }
+          updates.push(candidate);
         }
+        attempted = attempted.slice(0, updates.length);
+        for (const item of attempted) this.receipt(item.sourceId + ':' + item.sequence, 'sending');
+        const result = await this.request('/api/timers', { method: 'POST', body: JSON.stringify({ updates }) });
+        if (!Array.isArray(result.results) || result.results.length !== attempted.length || result.results.some((r, i) =>
+          r.sequence !== attempted[i].sequence || !Number.isSafeInteger(r.receivedAt) || !['accepted', 'duplicate', 'stale_session', 'sequence_gap'].includes(r.status))) throw new Error('invalid_reply');
+        await this.exclusive(async () => {
+          for (let i = 0; i < attempted.length; i++) {
+            const item = attempted[i], receipt = result.results[i], id = item.sourceId + ':' + item.sequence;
+            if (['accepted', 'duplicate'].includes(receipt.status)) {
+              this.queue = this.queue.filter(q => !(q.sourceId === item.sourceId && q.sequence === item.sequence));
+              this.receipt(id, 'sent', { receivedAt: receipt.receivedAt });
+            } else {
+              if (receipt.status === 'stale_session') {
+                source.retired = true;
+                for (const q of this.queue.filter(q => q.sourceId === item.sourceId)) this.receipt(q.sourceId + ':' + q.sequence, 'stopped', { error: 'stale_session' });
+                this.queue = this.queue.filter(q => q.sourceId !== item.sourceId);
+              } else this.transport.blocked = true;
+              this.receipt(id, 'stopped', { error: receipt.status });
+            }
+          }
+          this.transport.attempt = 0; await this.persist();
+        });
+        if (this.transport.blocked) break;
       }
-      case 'manual-retry': {
-        try { return await sendManual(); }
-        catch (e) { if (e.message === 'invalid_data') await save({ pendingManual: null }); throw e; }
-      }
-      case 'retry': await save({ blocked: false, retryPending: false }); await flush(true); return { ok: true };
-      case 'resume': { const result = await request('/v2/resume', { method: 'POST' }); await save({ remoteCache: result.state }); return result; }
-      default: throw new Error('unknown_message');
+      if (this.queue.length && !this.transport.blocked) await this.alarm.create('retry', { delayInMinutes: 1 });
+      else await this.alarm.clear('retry');
+    } catch (e) {
+      await this.exclusive(async () => {
+        this.transport.blocked = ['authentication', 'invalid_data'].includes(e.message);
+        this.transport.attempt++;
+        for (const item of attempted) this.receipt(item.sourceId + ':' + item.sequence, this.transport.blocked ? 'stopped' : 'retry', { error: e.message });
+        await this.persist();
+      });
+      if (!this.transport.blocked) await this.alarm.create('retry', { delayInMinutes: retryDelay(this.transport.attempt) / 60000 });
+    } finally { this.flushing = false; }
+  }
+  async settings(patch) {
+    const next = this.settingsSerial.then(async () => {
+      const settings = await this.request('/api/settings', patch ? { method: 'PATCH', body: JSON.stringify(patch) } : {});
+      if (!settings || typeof settings.hideBuildName !== 'boolean') throw new Error('invalid_reply');
+      this.settingsCache = settings; this.view.hideBuildName = settings.hideBuildName !== false;
+      this.changed(); return settings;
+    });
+    this.settingsSerial = next.catch(() => {}); return next;
+  }
+  async handle(message) {
+    await this.ready;
+    if (message.type === 'enqueue') return this.enqueue(message.observation);
+    if (message.type === 'calculation-settings') return this.localSettings(message.patch);
+    if (message.type === 'view') return this.publicView();
+    if (message.type === 'popup') return this.popup();
+    if (message.type === 'collector') { this.view.collector = message.active; this.view.error = message.error || ''; this.changed(); return { ok: true }; }
+    if (message.type === 'connection') return this.connection || { url: '', token: '' };
+    if (message.type === 'configure') {
+      if (!/^[A-Za-z0-9_-]{32,200}$/.test(message.token)) throw new Error('invalid_token');
+      await this.exclusive(async () => {
+        const url = endpoint(message.url);
+        if (this.queue.length && this.connection && (this.connection.url !== url || this.connection.token !== message.token)) throw new Error('pending_updates');
+        this.connection = { url, token: message.token }; this.transport.blocked = false; this.view.hideBuildName = true; this.settingsCache = null; await this.persist();
+      });
+      void this.flush(); return { ok: true };
     }
-  }).then(value => respond({ value }), e => respond({ error: e.message || 'failure' }));
-  return true;
-});
-async function init() {
-  await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
-  await chrome.alarms.clear('maintenance');
-  const s = await read();
-  if (s.protocol !== 2) {
-    await chrome.storage.local.remove(['held', 'clockServerTime', 'collectors', 'lastResults', 'recentSent', 'remoteCache']);
-    await save({ protocol: 2, play: null, queue: [], attempt: 0, retryPending: false, blocked: false, lastError: '' });
-    await chrome.alarms.clear('retry');
-  } else if (s.play && !s.play.retired && !s.blocked && s.queue.length
-    && !await chrome.alarms.get('retry')) await chrome.alarms.create('retry', { delayInMinutes: 1 });
+    if (message.type === 'settings') return this.settings(message.patch);
+    if (message.type === 'manual-list') return this.request('/api/manual');
+    if (message.type === 'manual-create') return this.request('/api/manual', { method: 'POST', body: JSON.stringify(message.command) });
+    if (message.type === 'manual-cancel') return this.request('/api/manual/' + encodeURIComponent(message.id), { method: 'DELETE' });
+    if (message.type === 'retry') {
+      await this.exclusive(async () => { this.transport.blocked = false; await this.persist(); });
+      void this.flush(); return { ok: true };
+    }
+    throw new Error('unknown_command');
+  }
+  popup() {
+    const now = this.clock ? this.clock.serverAt + Math.max(0, Date.now() - this.clock.clientAt) : Date.now();
+    const shipName = id => this.game.shipMasters[this.game.ships[id]?.api_ship_id]?.api_name || '艦ID ' + id;
+    const fleets = [1, 2, 3, 4].map(slot => {
+      const f = this.game.fleets[slot], ids = f?.api_ship?.filter(id => id > 0) || [];
+      const conds = ids.map(id => this.game.ships[id]?.api_cond);
+      const target = targetFor(this.calculationSettings, slot);
+      return { slot, minCond: conds.length && conds.every(Number.isInteger) ? Math.min(...conds) : null,
+        name: f?.api_name || '', mission: f?.api_mission || null,
+        missionName: this.game.missionMasters[f?.api_mission?.[1]]?.api_name || (f?.api_mission?.[1] ? '遠征ID ' + f.api_mission[1] : ''),
+        fatigue: this.model.timers['fatigue:' + slot] || { state: 'pending', endAt: null, detail: { reason: '未観測' } }, target,
+        ships: ids.map(id => ({ name: shipName(id), hp: this.game.ships[id]?.api_nowhp, maxHp: this.game.ships[id]?.api_maxhp })) };
+    });
+    const docks = kind => [1, 2, 3, 4].map(slot => {
+      const d = this.game[kind][slot], timer = this.model.timers[kind + ':' + slot];
+      return { slot, state: d?.api_state ?? null, endAt: timer?.endAt ?? null,
+        name: kind === 'repair' ? d?.api_ship_id ? shipName(d.api_ship_id) : ''
+          : this.view.hideBuildName ? '建造艦名非表示' : this.game.shipMasters[d?.api_created_ship_id]?.api_name || '建造中' };
+    });
+    return { observedAt: this.view.observedAt, now, collector: this.view.collector, error: this.view.error,
+      settings: this.calculationSettings, fleets, repair: docks('repair'), build: docks('build'),
+      akashi: [1, 2].map(slot => ({ slot, ...(this.model.timers['akashi:' + slot] || { state: 'pending', endAt: null, detail: { reason: '未観測' } }) })),
+      sending: Object.values(this.view.receipts).filter(r => ['queued', 'sending', 'retry'].includes(r.status)).length };
+  }
+  publicView() {
+    const view = structuredClone(this.view);
+    if (view.hideBuildName) {
+      for (const row of Object.values(view.timers)) if (row.data.kind === 'build') row.data.name = '建造艦名非表示';
+      for (const update of view.updates) for (const timer of update.timers) if (timer.kind === 'build') timer.name = '建造艦名非表示';
+    }
+    return view;
+  }
 }
-chrome.runtime.onInstalled.addListener(() => exclusive(init));
-chrome.runtime.onStartup.addListener(() => exclusive(async () => { await init(); await save({ collectors: {} }); await flush(true); }));
-chrome.alarms.onAlarm.addListener(a => { if (a.name === 'retry') return exclusive(() => flush(true)); });
-exclusive(init).catch(() => {});
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  const bridge = new ObservationBridge({ storage: chrome.storage.local, alarm: chrome.alarms,
+    broadcast: () => { chrome.runtime.sendMessage({ type: 'view-changed' }).catch(() => {}); } });
+  chrome.runtime.onMessage.addListener((message, sender, reply) => {
+    if (sender.id !== chrome.runtime.id || message.type === 'view-changed') return;
+    bridge.handle(message).then(value => reply({ value }), e => reply({ error: e.message })); return true;
+  });
+  chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'retry') void bridge.flush(); });
+  bridge.ready.then(async () => {
+    await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+    if (bridge.connection) bridge.settings().catch(() => {});
+    void bridge.flush();
+  });
+}

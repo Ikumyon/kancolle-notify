@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "艦これ 終了予定通知",
-  "version": "0.4.0",
-  "description": "受信済みの終了予定と疲労回復見込みを中央へ送り、手動予約と合わせて表示します。",
+  "version": "1.0.0",
+  "description": "ゲームから読み取った観測情報と送信状況を表示し、中央サーバーへ送信します。",
   "permissions": [
     "storage",
     "alarms"

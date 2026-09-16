@@ -1,5 +1,5 @@
 import { BaseProvider } from '../provider.js';
-import { formatPlainText } from '../formatters/text.js';
+import { formatPlainText, escapeHtml } from '../formatters/text.js';
 
 export class TelegramProvider extends BaseProvider {
   constructor() {
@@ -13,13 +13,14 @@ export class TelegramProvider extends BaseProvider {
   async send(delivery, env, sendFn = fetch) {
     const token = env.TELEGRAM_BOT_TOKEN;
     const chatId = env.TELEGRAM_CHAT_ID;
-    const text = formatPlainText(delivery);
+    const text = '<b>艦これ通知</b>\n' + escapeHtml(formatPlainText(delivery));
 
     try {
       const response = await sendFn(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
+        redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text }),
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
         signal: AbortSignal.timeout(15000)
       });
 

@@ -42,7 +42,7 @@ jobs:
             $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
           }
           Write-Host "Using ISCC: $iscc"
-          & $iscc tools/installer/setup.iss
+          & $iscc installer/setup.iss
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4

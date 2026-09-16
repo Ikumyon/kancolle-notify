@@ -106,3 +106,25 @@ body.settings-page { max-width: 680px; padding: 24px 20px 40px; }
 .akashi-card h3 { margin: 0 0 8px; }
 .akashi-ship { font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; line-height: 1.7; white-space: pre-wrap; }
 @media (max-width: 560px) { .akashi-fleets { grid-template-columns: 1fr; } }
+
+/* 観測詳細・設定ページ */
+.observations { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 12px; }
+.observation-card { padding: 12px; border: 1px solid #d6e0e9; border-radius: 8px; background: #f8fafc; min-width: 0; overflow-wrap: anywhere; }
+.ship-row { padding: 8px 0; border-top: 1px solid #d6e0e9; }
+.settings-page label { display: block; margin: 12px 0; }
+.settings-page input:not([type=checkbox]), .settings-page select { display: block; width: 100%; max-width: 520px; padding: 8px; border: 1px solid #9badbf; border-radius: 5px; font: inherit; }
+.settings-page input[type=checkbox] { display: inline-block; width: auto; accent-color: #24667c; margin-right: 8px; }
+.settings-page fieldset { margin: 12px 0; padding: 12px; border: 1px solid #d6e0e9; border-radius: 5px; }
+#manual-list button { margin-left: 12px; }
+
+.observation-page .receipt { display: block; color: #526779; font-size: 11px; margin: 3px 0 8px; }
+body.observation-page { max-width: 1120px; }
+body.popup { width: 780px; max-width: 100%; }
+.popup .fleet-card { min-width: 0; }
+.popup .fleet-card .segments { flex-wrap: wrap; }
+.popup .fleet-card .segments button { flex: 1 0 auto; }
+.popup .akashi-card { padding: 6px 8px; }
+.popup .akashi-card h3 { font-size: 12px; margin: 0 0 3px; }
+.popup .akashi-card p { margin: 2px 0; font-size: 11px; }
+.popup .popup-bottom-grid > * { min-width: 0; }
+.popup #settings-notice { white-space: pre-wrap; }

@@ -77,7 +77,9 @@ class DaemonController(QObject):
 
     def run_command(self, command, callback):
         """Qt のイベントループを止めずに CLI を実行。同じ操作は重複させない。"""
-        if command in self.processes:
+        args = list(command) if isinstance(command, (list, tuple)) else [command]
+        cmd_key = " ".join(args)
+        if cmd_key in self.processes:
             return
         if not self.is_installed():
             callback(False, f"{self.exe_name} が見つかりません。")
@@ -93,7 +95,7 @@ class DaemonController(QObject):
 
         timer = QTimer(process)
         timer.setSingleShot(True)
-        self.processes[command] = process
+        self.processes[cmd_key] = process
         timed_out = False
         completed = False
 
@@ -103,7 +105,7 @@ class DaemonController(QObject):
                 return
             completed = True
             timer.stop()
-            self.processes.pop(command, None)
+            self.processes.pop(cmd_key, None)
             process.deleteLater()
             callback(ok, message)
 
@@ -125,11 +127,11 @@ class DaemonController(QObject):
         process.finished.connect(finished)
         process.errorOccurred.connect(failed)
         timer.timeout.connect(timeout)
-        timer.start(3000 if command == "status" else 5000)
+        timer.start(3000 if args[0] == "status" else 5000)
         try:
             with external_dll_search_path():
                 # WindowsのQProcess.startはこの呼び出し中にCreateProcessする。
-                process.start(str(self.exe_path), [command])
+                process.start(str(self.exe_path), args)
         except OSError as error:
             process.kill()
             finish(False, str(error))
@@ -149,8 +151,6 @@ class DaemonController(QObject):
         default_cfg = {
             "server_url": "http://127.0.0.1:8787",
             "token": "",
-            "poll_interval_sec": 30,
-            "notify_advance_sec": 0,
             "play_sound": True
         }
         if self.config_file.exists():

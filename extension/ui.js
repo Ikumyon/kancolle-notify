@@ -1,355 +1,144 @@
-import { repairLine, MIN_REPAIR } from './core/akashi.js';
-import { jstTimestamp } from './core/manual.js';
-import { remainingText, expeditionFor } from './core/display.js';
-import { targetFor, fleetMinCond } from './core/fatigue.js';
-import { localView } from './core/local.js';
-const $ = s => document.querySelector(s);
-const time = n => n ? new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', dateStyle: 'short', timeStyle: 'medium' }).format(n) : '—';
-const labels = { akashi: '泊地修理', expedition: '遠征', repair: '入渠', build: '建造', fatigue: '疲労回復', active: '予定あり', pending: '終了時刻待ち', empty: '空き', complete: '完了',
-  sent: '通知送信', observation: '予定の観測', parse_error: '取得エラー', send_error: '配信エラー',
-  applied: '反映済み', stale_session: '別のプレイが開始されたため不採用', session_start: 'プレイ開始',
-  accepted: '中央受理済み', duplicate: '再送分・重複受理', stale: '古い情報のため不採用', same: '同じ予定・変更なし',
-  snapshot: '状態取得', start: '開始', change: '予定変更', manual: '手動予約', create: '登録', cancel: '取消', cancelled: '取消済み', manual_create: '手動予約登録', manual_cancel: '手動予約取消' };
-const messages = { stale_session: '別のプレイに切り替わったため、このプレイからの送信を停止しました', not_configured: '設定が必要です', authentication: '接続トークンを確認してください', connection: '中央に接続できません',
-  invalid_data: '送信データの確認が必要です', invalid_reply: '中央の応答を確認できません' };
-async function call(type, extra = {}) { const r = await chrome.runtime.sendMessage({ type, ...extra }); if (r.error) throw new Error(r.error); return r.value; }
-let akashiView = [];
-function renderAkashi(now) {
-  const container = $('#akashi-fleets'); if (!container) return;
-  container.replaceChildren();
-  for (const fleet of akashiView) {
-    const card = document.createElement('article'); card.className = 'akashi-card';
-    const heading = document.createElement('h3'); heading.textContent = `第${fleet.slot}艦隊`; card.append(heading);
-    const note = document.createElement('p'); note.className = 'muted';
-    note.textContent = !fleet.repair ? fleet.name || '情報待ち' : !Number.isFinite(now) ? '時刻未取得' : now < fleet.repair.start + MIN_REPAIR ? `修理開始まであと${Math.ceil((fleet.repair.start + MIN_REPAIR - now) / 60000)}分` : 'HP回復見込み'; card.append(note);
-    if (fleet.repair && Number.isFinite(now)) for (const ship of fleet.repair.ships) {
-      const row = document.createElement('p'); row.className = 'akashi-ship'; row.textContent = repairLine(ship, fleet.repair.start, now); card.append(row);
+import { time, remainingText, statusLabels } from './core/display.js';
+import { repairProgress } from './core/recovery.js';
+const $ = selector => document.querySelector(selector);
+const call = async (type, extra = {}) => {
+  const response = await chrome.runtime.sendMessage({ type, ...extra });
+  if (response?.error) throw new Error(response.error); return response.value;
+};
+const isPopup = document.body.classList.contains('popup');
+let view, popupView, loading = false, dirty = false, changingTarget = false;
+let timeMode = 'remaining', clockAnchor = 0;
+function node(tag, text, className) {
+  const n = document.createElement(tag); n.textContent = text;
+  if (className) n.className = className; return n;
+}
+function receipt(parent, id) {
+  const r = view.receipts[id];
+  if (r) parent.append(node('small', time(r.observedAt) + ' ・ ' + statusLabels[r.status] + (r.error ? ' (' + r.error + ')' : ''), 'receipt'));
+}
+function render() {
+  $('#notice').textContent = view.observedAt ? '最終読取: ' + time(view.observedAt) + (view.collector ? ' ・ 監視中' : ' ・ 監視停止') : '未観測';
+  $('#collector-error').textContent = view.error ? '読取エラー: ' + view.error : '';
+  const labels = { expedition: '遠征', fatigue: '疲労回復', akashi: '泊地修理', repair: '入渠', build: '建造' };
+  const states = { active: '予定あり', pending: '情報待ち', complete: '完了（観測・計算結果）', empty: '対象なし', cancelled: '取消' };
+  const cardFor = (t, id) => {
+    const card = node('article', '', 'observation-card');
+    card.append(node('h3', labels[t.kind] + ' ・ 第' + t.slot + (['repair', 'build'].includes(t.kind) ? 'ドック' : '艦隊')));
+    card.append(node('p', t.name), node('p', states[t.state]));
+    for (const event of t.events) {
+      card.append(node('p', (event.phase === 'start' ? '開始予定' : event.phase === 'full' ? '全回復予定' : '終了予定') + ': ' + (event.endAt ? time(event.endAt) : '未定')));
+      if (event.endAt) { const p = node('p', '', 'countdown'); p.dataset.end = event.endAt; card.append(p); }
+    }
+    receipt(card, id); return card;
+  };
+  for (const group of ['fleets', 'repair', 'build']) {
+    const container = $('#' + group); container.replaceChildren();
+    for (const row of Object.values(view.timers)) if (group === 'fleets' ? ['expedition', 'fatigue', 'akashi'].includes(row.data.kind) : row.data.kind === group) container.append(cardFor(row.data, row.observationId));
+    if (!container.children.length) container.append(node('p', '未観測', 'muted'));
+  }
+  const history = $('#operations'); history.replaceChildren();
+  for (const update of view.updates) {
+    const details = node('details', ''); details.append(node('summary', (update.reason === 'settings' ? '目標cond変更' : '読取による更新') + ' ・ ' + update.timers.length + '件'));
+    receipt(details, update.observationId);
+    for (const timer of update.timers) details.append(cardFor(timer, update.observationId));
+    history.append(details);
+  }
+  if (!view.updates.length) history.append(node('p', '送信するタイマーはありません', 'muted'));
+  countdown();
+}
+function popupDeadline(element, endAt, empty = '未観測') {
+  delete element.dataset.end;
+  if (Number.isSafeInteger(endAt) && endAt > 0) element.dataset.end = endAt;
+  else element.textContent = empty;
+}
+function renderPopup(data) {
+  popupView = data; clockAnchor = performance.now();
+  $('#notice').textContent = data.observedAt ? '読取 ' + time(data.observedAt) + (data.collector ? '' : ' ・ 監視停止') : '未観測';
+  if (data.error) $('#notice').textContent += ' ・ 読取エラー';
+  $('#send-summary').textContent = data.sending ? '送信待ち・送信中: ' + data.sending + '件' : '送信内容は詳細ページで確認できます';
+  for (const fleet of data.fleets) {
+    const cond = $('#fleet-cond-' + fleet.slot);
+    cond.textContent = fleet.minCond ?? '—';
+    cond.className = 'cond-badge ' + (fleet.minCond === null ? 'cond-none' : fleet.minCond >= 50 ? 'cond-kira' : fleet.minCond >= 40 ? 'cond-normal' : fleet.minCond >= 20 ? 'cond-tired' : 'cond-bad');
+    cond.title = fleet.ships.map(s => s.name + ' ' + (s.hp ?? '—') + '/' + (s.maxHp ?? '—')).join('\n');
+    const container = $('#fleet-presets-' + fleet.slot); container.replaceChildren();
+    const presets = [...(data.settings?.fatiguePresets || [40, 49])];
+    if (fleet.target !== null && !presets.includes(fleet.target)) presets.push(fleet.target);
+    for (const target of presets) {
+      const button = node('button', String(target)); button.type = 'button';
+      button.setAttribute('aria-pressed', String(fleet.target === target)); button.disabled = !data.settings || changingTarget;
+      button.title = '第' + fleet.slot + '艦隊の目標condを拡張へ保存';
+      button.addEventListener('click', async () => {
+        if (changingTarget) return;
+        changingTarget = true;
+        for (const b of document.querySelectorAll('#fleet-grid .segments button')) b.disabled = true;
+        try {
+          await call('calculation-settings', { patch: { fatigueTargets: { [fleet.slot]: fleet.target === target ? null : target } } });
+          $('#settings-notice').textContent = '第' + fleet.slot + '艦隊の目標condを保存しました';
+        } catch (e) { $('#settings-notice').textContent = '目標condを保存できません: ' + e.message; }
+        finally { changingTarget = false; await refresh(); }
+      }); container.append(button);
+    }
+    const f = fleet.fatigue;
+    popupDeadline($('#fleet-fatigue-time-' + fleet.slot), f.endAt, f.state === 'complete' ? '目標到達' : f.state === 'empty' ? '所属艦なし' : f.detail.reason);
+    const note = $('#fleet-fatigue-note-' + fleet.slot);
+    note.hidden = !f.endAt; note.textContent = '自然回復の見込み';
+    if (fleet.slot >= 2) {
+      const mission = fleet.mission;
+      $('#fleet-exp-name-' + fleet.slot).textContent = !mission ? '未観測' : mission[0] === 0 ? '待機' : fleet.missionName || '遠征中';
+      popupDeadline($('#fleet-exp-time-' + fleet.slot), mission?.[0] > 0 ? mission[2] : null, !mission ? '未観測' : mission[0] === 0 ? '—' : '時刻未観測');
+    }
+  }
+  for (const kind of ['repair', 'build']) for (const dock of data[kind]) {
+    const empty = dock.state === null ? '未観測' : dock.state < 0 ? '未開放' : dock.state === 0 ? '空き' : kind === 'build' && dock.state === 3 ? '建造完了' : dock.name;
+    const name = $('#' + kind + '-name-' + dock.slot); name.textContent = empty;
+    popupDeadline($('#' + kind + '-time-' + dock.slot), dock.state > 0 && !(kind === 'build' && dock.state === 3) ? dock.endAt : null, dock.state === null ? '未観測' : '—');
+  }
+  countdown();
+}
+function renderPopupAkashi(now) {
+  const container = $('#akashi-fleets'); container.replaceChildren();
+  for (const fleet of popupView.akashi) {
+    const card = node('article', '', 'akashi-card'); card.append(node('h3', '第' + fleet.slot + '艦隊'));
+    if (fleet.state !== 'active') card.append(node('p', fleet.detail.reason || '修理対象なし', 'muted'));
+    else {
+      card.append(node('p', now < fleet.detail.firstAt ? '修理開始まで ' + remainingText(fleet.detail.firstAt, now) : '最初の20分経過（見込み）'));
+      card.append(node('p', '全回復まで ' + remainingText(fleet.endAt, now)));
+      for (const ship of fleet.detail.ships) {
+        const progress = repairProgress(ship, fleet.detail.startAt, now);
+        card.append(node('p', ship.name + ': ' + ship.hp + '/' + ship.maxHp + ' → ' + progress.hpNow + '/' + ship.maxHp + ' (+' + progress.healed + ')', 'akashi-ship'));
+      }
     }
     container.append(card);
   }
-  if (!akashiView.length) container.textContent = '母港の情報待ち';
 }
-let busy = false, rerender = false;
-let timeMode = 'absolute', displayNow = null, displayAnchor = 0;
-const viewReady = chrome.storage.local.get('timeMode').then(r => { timeMode = r.timeMode === 'remaining' ? 'remaining' : 'absolute'; });
-function updateDeadlines() {
-  const now = displayNow === null ? null : displayNow + performance.now() - displayAnchor;
-  renderAkashi(now);
-  for (const node of document.querySelectorAll('[data-end]')) {
-    const end = Number(node.dataset.end);
-    node.textContent = timeMode === 'remaining' ? remainingText(end, now) : time(end);
-    node.title = `${time(end)}（日本時間）`;
+function countdown() {
+  const now = isPopup && popupView ? popupView.now + performance.now() - clockAnchor : Date.now();
+  for (const item of document.querySelectorAll('[data-end]')) {
+    const endAt = Number(item.dataset.end);
+    item.textContent = isPopup ? timeMode === 'remaining' ? remainingText(endAt, now) : time(endAt) : '残り ' + remainingText(endAt, now);
+    item.title = time(endAt) + '（観測・見込み時刻）';
   }
-  for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', String(b.dataset.mode === timeMode));
+  if (isPopup && popupView) renderPopupAkashi(now);
 }
-function deadline(r) {
-  const p = document.createElement('p'); p.className = 'deadline';
-  if (r.state === 'active' && r.end) p.dataset.end = r.end;
-  else p.textContent = r.kind === 'fatigue' ? r.name || labels[r.state] : labels[r.state] || '未計測';
-  return p;
+async function refresh() {
+  if (loading) { dirty = true; return; }
+  loading = true;
+  try { if (isPopup) renderPopup(await call('popup')); else { view = await call('view'); render(); } }
+  catch (e) { $('#notice').textContent = '観測情報の取得に失敗: ' + e.message; }
+  finally { loading = false; if (dirty) { dirty = false; void refresh(); } }
 }
-function dockReservations(data, hideBuildName = false) {
-  const container = $('#dock-reservations'); if (!container) return;
-  const slots = data?.slots || {};
+chrome.runtime.onMessage.addListener(message => { if (message.type === 'view-changed') void refresh(); });
+$('#retry')?.addEventListener('click', () => call('retry').catch(e => { $('#notice').textContent = e.message; }));
+const timer = setInterval(countdown, 1000);
+window.addEventListener('unload', () => clearInterval(timer));
+void refresh();
 
-  for (let slot = 1; slot <= 4; slot++) {
-    // 入渠
-    const repair = slots[`repair:${slot}`];
-    const rName = $(`#repair-name-${slot}`);
-    const rTime = $(`#repair-time-${slot}`);
-    if (rName && rTime) {
-      if (repair && repair.state === 'active' && repair.end) {
-        rName.textContent = repair.name || '修復中';
-        rName.className = 'dock-name';
-        rName.title = rName.textContent;
-        rTime.className = 'deadline';
-        rTime.dataset.end = repair.end;
-      } else if (repair && repair.state === 'complete') {
-        rName.textContent = repair.name || '完了';
-        rName.className = 'dock-name';
-        rName.title = rName.textContent;
-        delete rTime.dataset.end;
-        rTime.className = 'deadline good';
-        rTime.textContent = '完了';
-      } else if (repair?.state === 'pending') {
-        rName.textContent = repair.name || '入渠中';
-        rName.className = 'dock-name'; rName.title = rName.textContent;
-        delete rTime.dataset.end;
-        rTime.className = 'deadline'; rTime.textContent = '終了時刻待ち';
-      } else {
-        rName.textContent = '—';
-        rName.className = 'dock-name muted';
-        rName.title = '';
-        delete rTime.dataset.end;
-        rTime.className = 'deadline expedition-none';
-        rTime.textContent = '--:--';
-      }
-    }
-
-    // 建造
-    const build = slots[`build:${slot}`];
-    const bName = $(`#build-name-${slot}`);
-    const bTime = $(`#build-time-${slot}`);
-    if (bName && bTime) {
-      if (build && build.state === 'active' && build.end) {
-        bName.textContent = hideBuildName ? '建造中' : (build.name || '建造中');
-        bName.className = 'dock-name';
-        bName.title = bName.textContent;
-        bTime.className = 'deadline';
-        bTime.dataset.end = build.end;
-      } else if (build && build.state === 'complete') {
-        bName.textContent = hideBuildName ? '完成' : (build.name || '完了');
-        bName.className = 'dock-name';
-        bName.title = bName.textContent;
-        delete bTime.dataset.end;
-        bTime.className = 'deadline good';
-        bTime.textContent = '完了';
-      } else if (build?.state === 'pending') {
-        bName.textContent = hideBuildName ? '建造中' : (build.name || '建造中');
-        bName.className = 'dock-name'; bName.title = bName.textContent;
-        delete bTime.dataset.end;
-        bTime.className = 'deadline'; bTime.textContent = '終了時刻待ち';
-      } else {
-        bName.textContent = '—';
-        bName.className = 'dock-name muted';
-        rName?.title && (bName.title = '');
-        delete bTime.dataset.end;
-        bTime.className = 'deadline expedition-none';
-        bTime.textContent = '--:--';
-      }
-    }
-  }
+if (isPopup) {
+  for (const button of document.querySelectorAll('[data-mode]')) button.addEventListener('click', () => {
+    timeMode = button.dataset.mode;
+    for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', String(b === button));
+    countdown();
+  });
+  call('settings').catch(() => { $('#settings-notice').textContent = '中央に接続できません。目標condは拡張内で変更できます。'; });
 }
-function renderFleetGrid(local) {
-  if (!$('#fleet-grid')) return;
-  const settings = local?.fatigueSettings || { presets: [], defaultTarget: null, fleets: {} };
-  const presets = Array.isArray(settings.presets) ? settings.presets : [];
-  const fatigueList = Array.isArray(local?.fatigue) ? local.fatigue : [];
-
-  for (let fleet = 1; fleet <= 4; fleet++) {
-    // 1. 最低cond値
-    let minCond = null;
-    try { minCond = fleetMinCond(local?.fatigueSnapshot, fleet); } catch {}
-    const condBadge = $(`#fleet-cond-${fleet}`);
-    if (condBadge) {
-      if (minCond === null || minCond === undefined) {
-        condBadge.textContent = '—';
-        condBadge.className = 'cond-badge cond-none';
-        condBadge.title = '艦娘データなし';
-      } else {
-        condBadge.textContent = minCond;
-        condBadge.title = `第${fleet}艦隊 最低cond: ${minCond}`;
-        if (minCond >= 50) condBadge.className = 'cond-badge cond-kira';
-        else if (minCond >= 40) condBadge.className = 'cond-badge cond-normal';
-        else if (minCond >= 30) condBadge.className = 'cond-badge cond-tired';
-        else condBadge.className = 'cond-badge cond-bad';
-      }
-    }
-
-    // 2. 目標値プリセットボタン
-    const presetsBox = $(`#fleet-presets-${fleet}`);
-    if (presetsBox) {
-      const target = targetFor(settings, fleet);
-      const currentKeys = Array.from(presetsBox.querySelectorAll('button')).map(b => b.dataset.target).join(',');
-      const newKeys = presets.join(',');
-      if (currentKeys !== newKeys) {
-        presetsBox.replaceChildren();
-        for (const value of presets) {
-          const b = document.createElement('button'); b.type = 'button'; b.textContent = value;
-          b.dataset.fleet = fleet; b.dataset.target = value; b.setAttribute('aria-pressed', String(target === value));
-          b.addEventListener('click', async () => {
-            b.disabled = true;
-            try { await call('fatigue-target', { fleet, target: value }); await render(); }
-            catch { $('#notice').textContent = '目標値を保存できませんでした。'; b.disabled = false; }
-          });
-          presetsBox.append(b);
-        }
-      } else {
-        for (const b of presetsBox.querySelectorAll('button')) {
-          b.setAttribute('aria-pressed', String(Number(b.dataset.target) === target));
-        }
-      }
-    }
-
-    // 3. 疲労回復時刻
-    const r = fatigueList.find(r => r.slot === fleet);
-    const fTime = $(`#fleet-fatigue-time-${fleet}`);
-    const fNote = $(`#fleet-fatigue-note-${fleet}`);
-    if (fTime) {
-      if (r && r.state === 'active' && r.end) {
-        fTime.className = 'deadline';
-        fTime.dataset.end = r.end;
-      } else {
-        delete fTime.dataset.end;
-        fTime.className = 'deadline expedition-none';
-        fTime.textContent = '--:--';
-      }
-    }
-    if (fNote) {
-      if (r && r.state === 'active') {
-        const noteText = r.name || '';
-        fNote.textContent = noteText;
-        fNote.hidden = !noteText;
-      } else {
-        fNote.textContent = '';
-        fNote.hidden = true;
-      }
-    }
-
-    // 4. 遠征（全艦隊：出撃していない時は --:-- を表示）
-    const exp = expeditionFor(local, fleet);
-    const expName = $(`#fleet-exp-name-${fleet}`);
-    const expTime = $(`#fleet-exp-time-${fleet}`);
-    if (expName && expTime) {
-      if (exp && exp.state === 'active' && exp.end) {
-        expName.textContent = exp.name || '遠征中';
-        expName.className = 'expedition-name';
-        expName.title = exp.name || '';
-        expTime.className = 'deadline';
-        expTime.dataset.end = exp.end;
-      } else {
-        expName.textContent = fleet === 1 ? '—' : exp?.state === 'pending' ? (exp.name || '遠征中') : exp ? '未出撃' : '情報待ち';
-        expName.className = 'expedition-name muted';
-        expName.title = '';
-        delete expTime.dataset.end;
-        expTime.className = 'deadline expedition-none';
-        expTime.textContent = exp?.state === 'pending' ? '終了時刻待ち' : '--:--';
-      }
-    }
-  }
-}
-function renderInformation(selector, records) {
-  const container = $(selector); if (!container) return;
-  container.replaceChildren();
-  if (!records.length) {
-    container.textContent = '送信する情報はまだありません。'; return;
-  }
-  for (const record of [...records].reverse()) {
-    const sent = record.deliveryStatus === 'sent';
-    const card = document.createElement('article'); card.className = 'receipt';
-    const line = (text, className = '') => { const p = document.createElement('p'); p.textContent = text; p.className = className; card.append(p); };
-    line(record.deliveryStatus === 'error' ? `エラー：${messages[record.sendError] || record.sendError || '送信失敗'}` : sent ? '送信済み' : '送信待ち', record.deliveryStatus === 'error' ? 'error' : sent ? 'good' : 'muted');
-    line(`登録：${time(record.queuedAt || record.receivedAt)}${sent ? ` ／ 送信：${time(record.receivedAt)}` : ''}`, 'muted');
-    for (const e of record.events || []) {
-      line(e.kind === 'manual' ? `手動予約／${e.name}` : `${labels[e.kind]} ${['expedition', 'fatigue', 'akashi'].includes(e.kind) ? '第' + e.slot + '艦隊' : '第' + e.slot + 'ドック'}${e.name ? '／' + e.name : ''}`);
-      line(`${labels[e.action] || e.action}・${labels[e.state] || e.state}　終了予定：${time(e.end)}`);
-      const outcome = record.result?.results?.find(r => r.key === `${e.kind}:${e.slot}`)?.status || record.result?.status;
-      if (sent) line(labels[outcome] || outcome || '受理結果不明', outcome === 'stale_session' ? 'error' : '');
-    }
-    if (record.errors?.length) line(`取得エラー：${record.errors.join('、')}`, 'error');
-    const details = document.createElement('details'), summary = document.createElement('summary'), pre = document.createElement('pre');
-    summary.textContent = sent ? '送信した項目を見る' : '送信予定の項目を見る';
-    pre.textContent = JSON.stringify({ session: record.session, seq: record.seq, epoch: record.epoch, generation: record.generation, events: record.events, errors: record.errors }, null, 2);
-    details.append(summary, pre); card.append(details); container.append(card);
-  }
-}
-async function render() {
-  if (busy) { rerender = true; return; } busy = true;
-  try {
-    await viewReady;
-    const local = localView(await chrome.storage.local.get(null));
-    const data = { slots: { ...local.localSlots, ...local.manualSlots } };
-    renderInformation('#transmission-information', local.transmissions || []);
-    displayNow = Date.now();
-    displayAnchor = performance.now();
-    const isTestMode = !!(local.testMode || local.url === 'http://127.0.0.1:8787' || local.url?.includes('localhost'));
-    const modeBadge = $('#mode-badge'); if (modeBadge) modeBadge.hidden = !isTestMode;
-    akashiView = local.akashi || [];
-    renderFleetGrid(local); dockReservations(data, local.hideBuildName);
-    if ($('#manual-reservations')) {
-      $('#manual-retry').hidden = !local.pendingManual;
-      $('#manual-submit').disabled = !!local.pendingManual;
-      if (local.pendingManual) $('#manual-notice').textContent = '中央の受理結果を確認できていない手動予約があります。「受理結果を確認・再送」で同じ予約を確認します。';
-      const container = $('#manual-reservations'); container.replaceChildren();
-      for (const [key, r] of Object.entries(local.manualSlots || {}).filter(([, r]) => r.state === 'active' && r.end > displayNow)) {
-        const p = document.createElement('article'), button = document.createElement('button'); p.className = 'reservation';
-        p.textContent = `${r.name}　`; p.append(deadline(r)); button.textContent = '取消'; button.type = 'button';
-        button.addEventListener('click', async () => {
-          button.disabled = true;
-          try { await call('manual', { command: { action: 'cancel', id: key.slice(7) } }); $('#manual-notice').textContent = '予約を取り消しました。'; }
-          catch (e) { $('#manual-notice').textContent = manualError(e); }
-          await render();
-        });
-        p.append(button); container.append(p);
-      }
-    }
-    $('#notice').textContent = !local.configured ? '最初に設定画面で中央サービスへ接続してください。'
-      : local.lastError ? messages[local.lastError] || local.lastError : `この端末の取得内容を表示中・未送信${local.queued || 0}件`;
-    const lines = [`未送信：${local.queued}件`, `最終同期：${time(local.lastSync)}`];
-    lines.push('取得にはゲームタブのDevToolsが必要です。');
-    $('#summary')?.replaceChildren(...lines.map(text => { const p = document.createElement('p'); p.textContent = text; return p; }));
-    const table = $('#reservations');
-    if (table) {
-      table.replaceChildren();
-      for (const r of Object.values(data?.slots || {})) {
-        const tr = document.createElement('tr');
-        for (const v of [`${labels[r.kind]} ${r.slot ?? ''}${r.name ? ' ' + r.name : ''}`, labels[r.state], time(r.end)]) {
-          const td = document.createElement('td'); td.textContent = v; tr.append(td);
-        }
-        table.append(tr);
-      }
-    }
-    updateDeadlines();
-  } catch { $('#notice').textContent = '状態を読み取れません。画面を開き直してください。'; }
-  finally { busy = false; if (rerender) { rerender = false; render(); } }
-}
-function manualError(e) {
-  return ({ invalid_manual: '未来の日時、または1分以上の時間を入力してください。', invalid_data: '予約できませんでした。日時・通知名・未通知予約数（最大10件）を確認してください。',
-    manual_pending: '前の手動予約の受理結果を確認・再送してください。', not_configured: '最初に中央サービスへの接続を設定してください。',
-    authentication: '接続トークンを確認してください。' })[e.message] || '中央の受理結果を確認できません。接続復旧後に同じ予約を再送してください。';
-}
-$('#download-pending')?.addEventListener('click', async () => {
-  const button = $('#download-pending'), notice = $('#download-notice');
-  button.disabled = true;
-  try {
-    const s = await chrome.storage.local.get(['queue', 'play', 'lastError', 'blocked']);
-    const ticket = s.play?.ticket;
-    const data = {
-      exportedAt: new Date().toISOString(), lastError: s.lastError || '', blocked: !!s.blocked,
-      observations: (s.queue || []).map(o => ({
-        session: ticket?.session || o.session, epoch: ticket?.epoch, generation: ticket?.generation,
-        seq: o.seq, events: o.events, errors: o.errors
-      }))
-    };
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `kancolle-pending-${data.exportedAt.replace(/[:.]/g, '-')}.json`;
-    try { document.body.append(link); link.click(); }
-    finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-    notice.textContent = `送信待ち${data.observations.length}件のJSONをダウンロードしました。`;
-  } catch {
-    notice.textContent = '送信待ちデータを保存できませんでした。';
-  } finally { button.disabled = false; }
-});
-$('#manual-mode')?.addEventListener('change', () => {
-  const minutes = $('#manual-mode').value === 'minutes';
-  $('#minutes-field').hidden = !minutes; $('#datetime-field').hidden = minutes;
-  $('#manual-minutes').required = minutes; $('#manual-datetime').required = !minutes;
-});
-$('#manual-form')?.addEventListener('submit', async e => {
-  e.preventDefault(); $('#manual-submit').disabled = true;
-  try {
-    const mode = $('#manual-mode').value;
-    const command = { action: 'create', title: $('#manual-title').value.trim(), mode,
-      ...(mode === 'minutes' ? { minutes: Number($('#manual-minutes').value) } : { end: jstTimestamp($('#manual-datetime').value) }) };
-    const result = await call('manual', { command });
-    $('#manual-notice').textContent = `予約しました：${time(result.reservation.end)}（日本時間）`;
-  } catch (error) { $('#manual-notice').textContent = manualError(error); }
-  $('#manual-submit').disabled = false; await render();
-});
-$('#manual-retry')?.addEventListener('click', async () => {
-  try { await call('manual-retry'); $('#manual-notice').textContent = '中央の受理を確認しました。'; }
-  catch (e) { $('#manual-notice').textContent = manualError(e); }
-  await render();
-});
-for (const type of ['retry', 'resume']) $(`#${type}`)?.addEventListener('click', async () => { try { await call(type); await render(); } catch { $('#notice').textContent = '再開できません。設定を確認してください。'; } });
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && ['queue', 'lastSync', 'lastError', 'recentSent', 'pendingManual', 'fatigueSettings', 'fatigueSnapshot', 'akashi', 'hideBuildName', 'localSlots', 'manualSlots'].some(k => k in changes)) render();
-});
-for (const b of document.querySelectorAll('[data-mode]')) b.addEventListener('click', async () => {
-  timeMode = b.dataset.mode; updateDeadlines(); await chrome.storage.local.set({ timeMode });
-});
-// UI-only ticking; never polls the central service or the game.
-if ($('#time-mode')) setInterval(updateDeadlines, 1000);
-render();

@@ -1,44 +1,9 @@
-import math
 import sys
 import json
 import os
 import time
 from datetime import datetime
 from pathlib import Path
-
-def calculate_akashi_progress(ship: dict, start: int, now: int) -> dict:
-    """KC3準拠の明石修理（泊地修理）進捗計算"""
-    hp = ship.get("hp", 0)
-    max_hp = ship.get("max", hp)
-    missing = max(1, max_hp - hp)
-    repair = ship.get("repair", 0)
-    mod = ship.get("mod", 1.0)
-
-    base_repair = max(0, repair - 30000) * mod
-    minute = math.ceil(base_repair / 60000.0) * 60000.0
-    tick = math.ceil(minute / missing)
-
-    min_repair = 1200000
-    missing_num = max_hp - hp
-    if missing_num == 1:
-        end = start + min_repair
-    else:
-        end = start + max(min_repair, math.ceil(tick * missing_num / 60000.0) * 60000)
-
-    elapsed = max(0, now - start)
-    if elapsed < min_repair:
-        healed = 0
-    else:
-        minutes_ms = (elapsed // 60000) * 60000
-        count = math.floor(minutes_ms / tick) if tick > 0 else 0
-        healed = min(missing_num, max(1, count))
-
-    return {
-        "hp": min(max_hp, hp + healed),
-        "healed": healed,
-        "end": int(end),
-        "is_full": (hp + healed >= max_hp)
-    }
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPalette
@@ -120,21 +85,17 @@ class SettingsDialog(QDialog):
         form = QFormLayout()
 
         self.cfg = self.controller.load_config()
+        self.initial_offset = 0
 
         self.url_edit = QLineEdit(self.cfg.get("server_url", "http://127.0.0.1:8787"))
         self.token_edit = QLineEdit(self.cfg.get("token", ""))
         self.token_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
         self.token_edit.setPlaceholderText("DEVICE_TOKEN (空欄可)")
 
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(5, 600)
-        self.interval_spin.setValue(self.cfg.get("poll_interval_sec", 30))
-        self.interval_spin.setSuffix(" 秒")
-
-        self.advance_spin = QSpinBox()
-        self.advance_spin.setRange(0, 600)
-        self.advance_spin.setValue(self.cfg.get("notify_advance_sec", 0))
-        self.advance_spin.setSuffix(" 秒前 (0=ジャスト)")
+        self.offset_spin = QSpinBox()
+        self.offset_spin.setRange(-3600, 3600)
+        self.offset_spin.setValue(0)
+        self.offset_spin.setSuffix(" 秒 (負=事前/正=事後)")
 
         self.sound_check = QCheckBox("通知時にサウンドを鳴らす")
         self.sound_check.setChecked(self.cfg.get("play_sound", True))
@@ -147,12 +108,24 @@ class SettingsDialog(QDialog):
 
         form.addRow("Workers サーバーURL:", self.url_edit)
         form.addRow("端末認証トークン (Token):", self.token_edit)
-        form.addRow("ステータス確認間隔:", self.interval_spin)
-        form.addRow("事前通知タイミング:", self.advance_spin)
+        form.addRow("中央通知オフセット:", self.offset_spin)
         form.addRow("", self.sound_check)
         form.addRow("", self.autostart_check)
 
         layout.addLayout(form)
+
+        # 中央から現在のオフセットをコマンドで非同期取得
+        def on_offset_loaded(ok, output):
+            if ok:
+                try:
+                    data = json.loads(output)
+                    if "offsetSec" in data:
+                        val = int(data["offsetSec"])
+                        self.initial_offset = val
+                        self.offset_spin.setValue(val)
+                except Exception:
+                    pass
+        self.controller.run_command(["offset", "--json"], on_offset_loaded)
 
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -171,9 +144,12 @@ class SettingsDialog(QDialog):
     def save_and_close(self):
         self.cfg["server_url"] = self.url_edit.text().strip()
         self.cfg["token"] = self.token_edit.text().strip()
-        self.cfg["poll_interval_sec"] = self.interval_spin.value()
-        self.cfg["notify_advance_sec"] = self.advance_spin.value()
         self.cfg["play_sound"] = self.sound_check.isChecked()
+
+        # 中央通知オフセットが変更されていればコマンドで送信
+        new_offset = self.offset_spin.value()
+        if new_offset != self.initial_offset:
+            self.controller.run_command(["offset", str(new_offset)], lambda ok, out: None)
 
         # 自動起動の変更を反映
         curr_autostart = self.controller.get_autostart()
@@ -195,7 +171,8 @@ class TimetableWindow(QWidget):
     def __init__(self, base_dir: Path):
         super().__init__()
         self.controller = DaemonController(base_dir)
-        self.cached_slots = {}
+        self.cached_timers = []
+        self.offset_sec = 0
         self._status_generation = 0
         self._active_action = None
         self.init_ui()
@@ -213,65 +190,63 @@ class TimetableWindow(QWidget):
         self.refresh_daemon_status()
 
     def init_ui(self):
-        self.setWindowTitle("艦これ 運行案内表示板 (Kancolle Timetable)")
+        self.setWindowTitle("艦これ 通知管理")
         self.resize(850, 480)
         self.setMinimumSize(700, 360)
 
-        # 発車案内標（Departures Board）風のダークスタイリング
         self.setStyleSheet("""
             QWidget {
-                background-color: #0b0e14;
-                color: #e5e9f0;
+                background-color: #0f172a;
+                color: #f8fafc;
                 font-family: 'Segoe UI', Meiryo, sans-serif;
             }
             QFrame#headerPanel {
-                background-color: #121824;
-                border-bottom: 2px solid #1e293b;
-                padding: 10px 15px;
+                background-color: #1e293b;
+                border-bottom: 1px solid #334155;
+                padding: 10px 16px;
             }
             QLabel#boardTitle {
-                font-size: 18px;
+                font-size: 16px;
                 font-weight: bold;
-                letter-spacing: 2px;
-                color: #f1f5f9;
+                color: #f8fafc;
+                letter-spacing: 0.5px;
             }
             QLabel#clockDisplay {
                 font-family: Consolas, 'Courier New', monospace;
-                font-size: 22px;
+                font-size: 20px;
                 font-weight: bold;
                 color: #38bdf8;
-                letter-spacing: 1px;
             }
             QLabel#statusIndicator {
-                font-size: 13px;
-                font-weight: bold;
+                font-size: 12px;
+                font-weight: 600;
                 padding: 4px 10px;
-                border-radius: 12px;
+                border-radius: 10px;
             }
             QTableWidget {
-                background-color: #0a0d12;
-                gridline-color: #1a2230;
-                border: 1px solid #1e293b;
+                background-color: #0f172a;
+                gridline-color: #1e293b;
+                border: none;
                 selection-background-color: #1e293b;
                 selection-color: #ffffff;
                 font-size: 13px;
             }
             QHeaderView::section {
-                background-color: #141b27;
+                background-color: #1e293b;
                 color: #94a3b8;
-                font-weight: bold;
+                font-weight: 600;
                 font-size: 12px;
                 padding: 8px;
-                border: 1px solid #1e293b;
+                border: 1px solid #334155;
             }
             QFrame#controlPanel {
-                background-color: #121824;
-                border-top: 1px solid #1e293b;
-                padding: 8px 12px;
+                background-color: #1e293b;
+                border-top: 1px solid #334155;
+                padding: 8px 16px;
             }
             QPushButton {
-                background-color: #1e293b;
-                border: 1px solid #334155;
+                background-color: #334155;
+                border: 1px solid #475569;
                 color: #f8fafc;
                 border-radius: 4px;
                 padding: 6px 14px;
@@ -279,26 +254,25 @@ class TimetableWindow(QWidget):
                 font-weight: 500;
             }
             QPushButton:hover {
-                background-color: #334155;
-                border-color: #475569;
+                background-color: #475569;
             }
             QPushButton#startBtn {
-                background-color: #065f46;
-                border-color: #059669;
-                color: #ecfdf5;
+                background-color: #2563eb;
+                border: 1px solid #3b82f6;
+                color: #ffffff;
                 font-weight: bold;
             }
             QPushButton#startBtn:hover {
-                background-color: #047857;
+                background-color: #1d4ed8;
             }
             QPushButton#stopBtn {
-                background-color: #881337;
-                border-color: #e11d48;
-                color: #fff1f2;
+                background-color: #dc2626;
+                border: 1px solid #ef4444;
+                color: #ffffff;
                 font-weight: bold;
             }
             QPushButton#stopBtn:hover {
-                background-color: #9f1239;
+                background-color: #b91c1c;
             }
         """)
 
@@ -306,17 +280,20 @@ class TimetableWindow(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. 発車案内ヘッダー
+        # 1. ヘッダー
         header = QFrame()
         header.setObjectName("headerPanel")
         header_layout = QHBoxLayout(header)
 
-        title_label = QLabel("⚓ 艦隊運行案内 (FLEET DEPARTURES)")
+        title_label = QLabel("⚓ 艦これ 通知ステータス")
         title_label.setObjectName("boardTitle")
 
-        self.status_label = QLabel("● 停止中")
+        self.status_label = QLabel("○ 停止中")
         self.status_label.setObjectName("statusIndicator")
-        self.status_label.setStyleSheet("background-color: #3f1d24; color: #f87171;")
+        self.status_label.setStyleSheet("background-color: #451a1a; color: #f87171;")
+
+        self.offset_label = QLabel("通知オフセット: 0秒")
+        self.offset_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
 
         self.clock_label = QLabel("--:--:--")
         self.clock_label.setObjectName("clockDisplay")
@@ -324,29 +301,31 @@ class TimetableWindow(QWidget):
         header_layout.addWidget(title_label)
         header_layout.addSpacing(15)
         header_layout.addWidget(self.status_label)
+        header_layout.addSpacing(15)
+        header_layout.addWidget(self.offset_label)
         header_layout.addStretch()
         header_layout.addWidget(self.clock_label)
 
         main_layout.addWidget(header)
 
-        # 2. 時刻表テーブル (Timetable Table)
+        # 2. タイマー一覧テーブル
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels([
-            "種別 (TYPE)",
-            "艦隊 / ドック (SLOT)",
-            "行先 / 対象 (DESTINATION)",
-            "完了予定 (DUE)",
-            "残り時間 (TIME LEFT)",
-            "状態 (STATUS)"
+            "種別",
+            "艦隊 / ドック",
+            "内容",
+            "完了予定",
+            "残り時間",
+            "状態"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 100)
-        self.table.setColumnWidth(1, 140)
+        self.table.setColumnWidth(0, 90)
+        self.table.setColumnWidth(1, 130)
         self.table.setColumnWidth(3, 110)
-        self.table.setColumnWidth(4, 130)
-        self.table.setColumnWidth(5, 110)
+        self.table.setColumnWidth(4, 120)
+        self.table.setColumnWidth(5, 100)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -358,15 +337,15 @@ class TimetableWindow(QWidget):
         footer.setObjectName("controlPanel")
         footer_layout = QHBoxLayout(footer)
 
-        self.start_btn = QPushButton("▶ 運行開始 (Start)")
+        self.start_btn = QPushButton("▶ 常駐開始")
         self.start_btn.setObjectName("startBtn")
         self.start_btn.clicked.connect(self.start_daemon)
 
-        self.stop_btn = QPushButton("■ 運行停止 (Stop)")
+        self.stop_btn = QPushButton("■ 常駐停止")
         self.stop_btn.setObjectName("stopBtn")
         self.stop_btn.clicked.connect(self.stop_daemon)
 
-        self.refresh_btn = QPushButton("🔄 再読み込み")
+        self.refresh_btn = QPushButton("🔄 更新")
         self.refresh_btn.clicked.connect(self.refresh_daemon_status)
 
         self.test_btn = QPushButton("🔔 通知テスト")
@@ -392,7 +371,7 @@ class TimetableWindow(QWidget):
         self.update_remaining_times()
 
     def refresh_daemon_status(self):
-        """デーモン状態とスロット情報の再取得"""
+        """デーモン状態とタイマー情報の再取得"""
         if self._active_action is not None:
             return
         if not self.controller.is_installed():
@@ -400,7 +379,7 @@ class TimetableWindow(QWidget):
             self.status_label.setStyleSheet("background-color: #422006; color: #fbbf24;")
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
-            self.cached_slots = {}
+            self.cached_timers = []
             self.rebuild_table()
             return
 
@@ -417,7 +396,7 @@ class TimetableWindow(QWidget):
             if not ok:
                 raise ValueError(output)
             status = json.loads(output)
-            if not isinstance(status, dict) or not isinstance(status.get("slots", {}), dict):
+            if not isinstance(status, dict):
                 raise ValueError("不正なステータス応答")
         except (ValueError, TypeError) as error:
             self.status_label.setText("▲ 状態取得失敗")
@@ -426,66 +405,49 @@ class TimetableWindow(QWidget):
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(True)
             return
+
         self.status_label.setToolTip("")
         is_running = status.get("is_running", False)
         pid = status.get("pid")
 
         if is_running:
-            self.status_label.setText(f"● 運行中 (PID: {pid})")
+            self.status_label.setText(f"● 常駐中 (PID: {pid})")
             self.status_label.setStyleSheet("background-color: #064e3b; color: #34d399;")
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
         else:
-            self.status_label.setText("○ 運行停止中")
+            self.status_label.setText("○ 停止中")
             self.status_label.setStyleSheet("background-color: #451a1a; color: #f87171;")
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
 
-        self.cached_slots = status.get("slots", {})
+        self.offset_sec = status.get("offset_sec", 0)
+        self.offset_label.setText(
+            f"通知オフセット: {self.offset_sec:+d}秒" if self.offset_sec != 0 else "通知オフセット: ±0秒"
+        )
+
+        self.cached_timers = status.get("timers", [])
         self.rebuild_table()
 
     def rebuild_table(self):
-        """スロット一覧を時刻表テーブルに反映"""
+        """タイマー一覧を時刻表テーブルに反映"""
         self.table.setRowCount(0)
 
-        if not self.cached_slots:
+        if not self.cached_timers:
             return
 
-        # スロットをソート（遠征 -> 入渠 -> 疲労 -> 建造 -> その他、同一種別内はスロット番号順）
+        # 種別順（遠征 -> 入渠 -> 疲労 -> 建造 -> 泊地 -> 手動）、同一種別内はスロット番号順
         kind_order = {"expedition": 1, "repair": 2, "fatigue": 3, "build": 4, "akashi": 5, "manual": 6}
-        sorted_keys = sorted(
-            self.cached_slots.keys(),
-            key=lambda k: (
-                kind_order.get(self.cached_slots[k].get("kind", ""), 99),
-                self.cached_slots[k].get("slot") or 0
-            )
+        sorted_timers = sorted(
+            self.cached_timers,
+            key=lambda it: (kind_order.get(it.get("kind", ""), 99), it.get("slot") or 0, it.get("id", ""))
         )
 
-        for row, key in enumerate(sorted_keys):
-            item = self.cached_slots[key]
+        for row, item in enumerate(sorted_timers):
             kind = item.get("kind", "")
             slot_num = item.get("slot") or 0
             name = item.get("name") or "—"
-            end_ms = item.get("end")
-            state_str = item.get("state", "empty")
-
-            # 泊地修理（明石修理）の詳細表示
-            if kind == "akashi" and state_str == "active" and item.get("repair"):
-                repair_data = item["repair"]
-                start_ms = repair_data.get("start", 0)
-                ships = repair_data.get("ships", [])
-                now_ms = time.time() * 1000
-
-                ship_parts = []
-                latest_end = start_ms + 1200000
-                for s in ships:
-                    p = calculate_akashi_progress(s, start_ms, int(now_ms))
-                    status_lbl = "全快" if p["is_full"] else f"残{max(0, math.ceil((p['end'] - now_ms) / 60000))}分"
-                    ship_parts.append(f"{s.get('name')}: {s.get('hp')}→{p['hp']} (+{p['healed']}) {status_lbl}")
-                    if p["end"] > latest_end:
-                        latest_end = p["end"]
-                name = " / ".join(ship_parts) if ship_parts else (name or "修理中")
-                end_ms = latest_end if now_ms >= start_ms + 1200000 else (start_ms + 1200000)
+            end_ms = item.get("end_at")
 
             self.table.insertRow(row)
 
@@ -543,116 +505,56 @@ class TimetableWindow(QWidget):
         """テーブル内のカウントダウンと状態表示を更新"""
         now_ms = time.time() * 1000
 
+        kind_order = {"expedition": 1, "repair": 2, "fatigue": 3, "build": 4, "akashi": 5, "manual": 6}
+        sorted_timers = sorted(
+            self.cached_timers,
+            key=lambda it: (kind_order.get(it.get("kind", ""), 99), it.get("slot") or 0, it.get("id", ""))
+        )
+
         for row in range(self.table.rowCount()):
-            # 種別とスロットからキーを推定、または cached_slots から取得
-            kind_item = self.table.item(row, 0)
-            if not kind_item:
+            if row >= len(sorted_timers):
                 continue
 
-            # 行の予定時刻アイテムから end_ms を逆算するか、cached_slots から引く
-            # ここではテーブル各行に対応するデータを順次参照
-            keys = sorted(
-                self.cached_slots.keys(),
-                key=lambda k: (
-                    {"expedition": 1, "repair": 2, "fatigue": 3, "build": 4, "akashi": 5, "manual": 6}.get(
-                        self.cached_slots[k].get("kind", ""), 99
-                    ),
-                    self.cached_slots[k].get("slot") or 0
-                )
-            )
-            if row >= len(keys):
-                continue
-
-            item = self.cached_slots[keys[row]]
+            item = sorted_timers[row]
             kind = item.get("kind", "")
-            end_ms = item.get("end")
+            end_ms = item.get("end_at")
             state_str = item.get("state", "empty")
+            events = item.get("events", [])
 
             rem_item = self.table.item(row, 4)
             status_item = self.table.item(row, 5)
 
-            # --- 泊地修理（明石修理）の動的更新 ---
-            if kind == "akashi" and state_str == "active" and item.get("repair"):
-                repair_data = item["repair"]
-                start_ms = repair_data.get("start", 0)
-                ships = repair_data.get("ships", [])
-                min_repair_due = start_ms + 1200000
-
-                # 艦娘一覧表示と全回復判定の更新
-                ship_parts = []
-                latest_end = min_repair_due
-                all_full = True
-                for s in ships:
-                    p = calculate_akashi_progress(s, start_ms, int(now_ms))
-                    if not p["is_full"]:
-                        all_full = False
-                    status_lbl = "全快" if p["is_full"] else f"残{max(0, math.ceil((p['end'] - now_ms) / 60000))}分"
-                    ship_parts.append(f"{s.get('name')}: {s.get('hp')}→{p['hp']} (+{p['healed']}) {status_lbl}")
-                    if p["end"] > latest_end:
-                        latest_end = p["end"]
-
-                # 行先/対象カラムを最新HPで更新
-                name_item = self.table.item(row, 2)
-                if name_item and ship_parts:
-                    name_item.setText(" / ".join(ship_parts))
-
-                due_item = self.table.item(row, 3)
-
-                if now_ms < min_repair_due:
-                    # 20分到達前
-                    if due_item:
-                        due_dt = datetime.fromtimestamp(min_repair_due / 1000.0)
-                        due_item.setText(due_dt.strftime("%H:%M:%S"))
-                    diff_sec = int((min_repair_due - now_ms) / 1000)
-                    minutes = diff_sec // 60
-                    seconds = diff_sec % 60
-                    if rem_item:
-                        rem_item.setText(f"{minutes:02d}:{seconds:02d}")
-                        rem_item.setForeground(QColor("#fbbf24"))
-                    if status_item:
-                        status_item.setText("20分待機")
-                        status_item.setForeground(QColor("#c084fc"))
-                else:
-                    # 20分経過後
-                    if due_item:
-                        due_dt = datetime.fromtimestamp(latest_end / 1000.0)
-                        due_item.setText(due_dt.strftime("%H:%M:%S"))
-                    diff_sec = int((latest_end - now_ms) / 1000)
-                    if all_full or diff_sec <= 0:
-                        if rem_item:
-                            rem_item.setText("00:00:00")
-                            rem_item.setForeground(QColor("#4ade80"))
-                        if status_item:
-                            status_item.setText("★ 全回復")
-                            status_item.setForeground(QColor("#4ade80"))
-                    else:
-                        hours = diff_sec // 3600
-                        minutes = (diff_sec % 3600) // 60
-                        seconds = diff_sec % 60
-                        time_text = f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours > 0 else f"{minutes:02d}:{seconds:02d}"
-                        if rem_item:
-                            rem_item.setText(time_text)
-                            rem_item.setForeground(QColor("#e2e8f0"))
-                        if status_item:
-                            status_item.setText("修理中")
-                            status_item.setForeground(QColor("#c084fc"))
-                continue
-
             if state_str == "empty":
-                if rem_item: rem_item.setText("—")
+                if rem_item:
+                    rem_item.setText("—")
+                    rem_item.setForeground(QColor("#94a3b8"))
                 if status_item:
                     status_item.setText("待機中")
                     status_item.setForeground(QColor("#64748b"))
                 continue
 
-            if not end_ms or end_ms == 0:
-                if rem_item: rem_item.setText("未定")
+            # 直近未到達のイベント（akashiの20分待機など）があれば取得
+            target_ms = end_ms
+            phase_text = None
+            if events:
+                upcoming = [e for e in events if e.get("end_at") and e.get("end_at") > now_ms]
+                if upcoming:
+                    upcoming.sort(key=lambda e: e.get("end_at"))
+                    target_ev = upcoming[0]
+                    if target_ev.get("phase") == "20min":
+                        target_ms = target_ev.get("end_at")
+                        phase_text = "20分待機"
+
+            if not target_ms or target_ms == 0:
+                if rem_item:
+                    rem_item.setText("未定")
+                    rem_item.setForeground(QColor("#94a3b8"))
                 if status_item:
                     status_item.setText("準備中")
                     status_item.setForeground(QColor("#94a3b8"))
                 continue
 
-            diff_sec = int((end_ms - now_ms) / 1000)
+            diff_sec = int((target_ms - now_ms) / 1000)
 
             if diff_sec <= 0:
                 if rem_item:
@@ -678,9 +580,13 @@ class TimetableWindow(QWidget):
                         rem_item.setForeground(QColor("#e2e8f0"))
 
                 if status_item:
-                    status_text, s_color = self.get_state_display(item.get("kind", ""))
-                    status_item.setText(status_text)
-                    status_item.setForeground(QColor(s_color))
+                    if phase_text:
+                        status_item.setText(phase_text)
+                        status_item.setForeground(QColor("#c084fc"))
+                    else:
+                        status_text, s_color = self.get_state_display(kind)
+                        status_item.setText(status_text)
+                        status_item.setForeground(QColor(s_color))
 
     def get_type_badge(self, kind: str) -> tuple[str, str]:
         badges = {
@@ -710,13 +616,14 @@ class TimetableWindow(QWidget):
 
     def get_state_display(self, kind: str) -> tuple[str, str]:
         states = {
-            "expedition": ("航行中", "#38bdf8"),
-            "repair": ("修復中", "#34d399"),
+            "expedition": ("遠征中", "#38bdf8"),
+            "repair": ("入渠中", "#34d399"),
             "build": ("建造中", "#22d3ee"),
-            "fatigue": ("回復待機", "#f472b6"),
+            "fatigue": ("回復待ち", "#f472b6"),
             "akashi": ("修理中", "#c084fc"),
+            "manual": ("予約中", "#a855f7"),
         }
-        return states.get(kind, ("進行中", "#94a3b8"))
+        return states.get(kind, ("待機中", "#94a3b8"))
 
     def start_daemon(self):
         self.run_action("start", "起動失敗")

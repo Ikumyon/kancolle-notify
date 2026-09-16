@@ -1,223 +1,87 @@
-import { validRepair, repairProgress, MIN_REPAIR } from './akashi.js';
-import { validId, validGeneration, isCurrent } from './generation.js';
-import { getOffsetSec, nextDeliveryAt as timerNextDeliveryAt } from './timer.js';
-import { formatPlainText } from '../notify/formatters/text.js';
-
-export { formatPlainText as formatDelivery };
-export const retryDelay = attempt => Math.min(5, 2 ** Math.min(Math.max(0, attempt - 1), 3)) * 60000;
-
-export const emptyState = () => ({
-  epoch: crypto.randomUUID(),
-  generation: '0',
-  activeSession: null,
-  starts: {},
-  slots: {},
-  history: [],
-  delivery: null,
-  authBlocked: false,
-  offsetSec: 0,
-  notificationAdvanceSec: 0
-});
-
-const keyOf = e => `${e.kind}:${e.slot}`;
-const equal = (a, b) => a.state === b.state && a.end === b.end && a.subject === b.subject && a.name === (b.name || '') && JSON.stringify(a.repair || null) === JSON.stringify(b.repair || null);
-
-export function history(s, now, type, detail) {
-  s.history.push({ ...detail, at: now, type });
+import { targetDeliveryTime } from './timer.js';
+import { validId, issueSession } from './generation.js';
+export { validId } from './generation.js';
+export const kinds = ['expedition', 'repair', 'build', 'akashi', 'fatigue'];
+export const defaultSettings = () => ({ offsetSec: 0, providers: { discord: false, telegram: false },
+  categories: Object.fromEntries(kinds.map(k => [k, true])), hideBuildName: true });
+export const emptyState = () => ({ schema: 2, settings: defaultSettings(), session: null, sessions: {}, timers: {}, deliveries: {}, history: [] });
+export function record(s, now, type, detail = {}) { s.history.push({ at: now, type, ...detail }); }
+export function beginSession(s, requestId, device, now) {
+  const { sessionId, fresh } = issueSession(s, requestId, device);
+  if (fresh) record(s, now, 'session_start');
+  return { sessionId };
 }
-
-export function prune(s, now) {
-  s.history = s.history.filter(h => h.at >= now - 30 * 86400000);
-}
-
-export function validateObservation(o, now) {
-  if (!o || !validId(o.session) || !validId(o.epoch) || !validGeneration(o.generation)
-    || !Number.isSafeInteger(o.seq) || o.seq < 1 || Object.hasOwn(o, 'time')) return false;
-  if (!Array.isArray(o.events) || o.events.length > 20 || !Array.isArray(o.errors) || o.errors.length > 20) return false;
-  const seen = new Set();
-  for (const e of o.events) {
-    if (!e || !['expedition', 'repair', 'build', 'fatigue', 'akashi'].includes(e.kind) || !Number.isInteger(e.slot)
-      || e.slot < (e.kind === 'expedition' ? 2 : 1) || e.slot > 4
-      || !['snapshot', 'start', 'change', 'complete'].includes(e.action)
-      || !['active', 'pending', 'empty', 'complete'].includes(e.state)) return false;
-    if (e.action === 'start' && e.state !== 'pending' || e.action === 'complete' && e.state !== 'complete'
-      || e.action === 'change' && (e.kind !== 'expedition' || e.state !== 'active')
-      || e.action === 'snapshot' && e.state === 'pending' && !['fatigue', 'akashi'].includes(e.kind)) return false;
-    if (e.kind === 'akashi' && (e.action !== 'snapshot' || (e.state === 'active' ? !validRepair(e.repair) || e.end !== e.repair.start + MIN_REPAIR || e.subject !== e.repair.start : e.repair !== null))) return false;
-    if (e.kind === 'fatigue' && (e.action !== 'snapshot' || e.subject !== null && e.subject > 101)) return false;
-    if (e.state === 'active' ? !Number.isSafeInteger(e.end) || e.end <= 0 : e.end !== null) return false;
-    if (e.subject !== null && (!Number.isSafeInteger(e.subject) || e.subject <= 0)) return false;
-    if (e.state === 'active' && e.kind !== 'build' && e.subject === null) return false;
-    if (e.name !== undefined && (typeof e.name !== 'string' || e.name.length > 80)) return false;
-    const k = keyOf(e); if (seen.has(k)) return false; seen.add(k);
-  }
-  return o.errors.every(e => typeof e === 'string' && /^[a-z_]{1,50}$/.test(e));
-}
-
-export function observe(s, input, device, now) {
-  if (!validateObservation(input, now)) throw new Error('invalid_observation');
-  if (!isCurrent(s, input, device)) return { seq: input.seq, status: 'stale_session', results: [] };
-  if (input.seq <= s.activeSession.seq) return { seq: input.seq, status: 'duplicate', results: [] };
-  s.activeSession.seq = input.seq;
-  const results = [];
-  for (const raw of input.events) {
-    const e = { kind: raw.kind, slot: raw.slot, action: raw.action, state: raw.state,
-      end: raw.end, subject: raw.subject, name: raw.name || '', ...(raw.kind === 'akashi' ? { repair: structuredClone(raw.repair) } : {}) };
-    const key = keyOf(e), previous = s.slots[key];
-    if (previous && equal(previous, e) && e.action !== 'start') {
-      results.push({ key, status: 'same' }); continue;
+export function reconcile(s, now) {
+  for (const timer of Object.values(s.timers)) {
+    timer.notifyAt = targetDeliveryTime(timer, s.settings.offsetSec);
+    const enabled = timer.kind === 'manual' || s.settings.categories[timer.kind];
+    for (const d of Object.values(s.deliveries).filter(d => d.timerId === timer.id)) {
+      if (['pending', 'sending'].includes(d.status) && (!enabled || !s.settings.providers[d.provider] || d.revision !== timer.revision ||
+        !timer.events.some(e => e.id === d.eventId) || d.type !== 'correction' && timer.state !== 'active')) d.status = 'cancelled';
     }
-    const newActivity = e.action === 'start' || previous && (
-      ['empty', 'complete'].includes(previous.state) && ['pending', 'active'].includes(e.state)
-      || previous.state === 'active' && e.state === 'active' && previous.subject !== e.subject
-      || previous.sent && e.state === 'active' && previous.end !== e.end && e.action !== 'change');
-    s.slots[key] = { ...e, generation: previous ? previous.generation + (newActivity ? 1 : 0) : 1,
-      revision: (previous?.revision || 0) + 1, sent: previous?.sent || null,
-      ...(e.kind === 'akashi' ? { repairSent: previous?.repair?.start === e.repair?.start ? previous?.repairSent || [] : [] } : {}),
-      observation: { device, session: input.session, seq: input.seq, receivedAt: now } };
-    results.push({ key, status: 'applied' });
-    history(s, now, 'observation', { key, status: 'applied', end: e.end });
-  }
-  for (const code of input.errors) history(s, now, 'parse_error', { device, code });
-  prune(s, now);
-  return { seq: input.seq, status: 'accepted', results };
-}
-
-function itemFor(key, r, now, offsetSec = 0) {
-  const isAdjustable = ['expedition', 'repair', 'fatigue', 'akashi'].includes(r.kind);
-  const offsetMs = isAdjustable ? offsetSec * 1000 : 0;
-
-  if (r.kind === 'akashi') {
-    if (r.state !== 'active' || !r.repair) return null;
-    const sent = r.repairSent || [];
-    const due = [
-      { id: 'start', end: r.repair.start + MIN_REPAIR },
-      ...r.repair.ships.map(ship => ({ id: String(ship.id), end: repairProgress(ship, r.repair.start, now).end }))
-    ].filter(x => (x.end + offsetMs) <= now && !sent.includes(x.id));
-
-    if (!due.length) return null;
-    return {
-      key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
-      type: 'normal', end: Math.min(...due.map(x => x.end)), state: r.state,
-      repair: structuredClone(r.repair), milestones: due.map(x => x.id), at: now,
-      offsetMs, advanceMs: offsetMs < 0 ? -offsetMs : 0
-    };
-  }
-
-  const sent = r.sent?.generation === r.generation ? r.sent : null;
-  if (sent) {
-    const changedEnd = r.state === 'active' && r.end !== sent.end;
-    const earlyComplete = (['complete', 'empty'].includes(r.state) && r.observation.receivedAt < sent.end + (sent.offsetMs || 0))
-      || r.kind === 'fatigue' && r.state === 'pending';
-    if (!(changedEnd || earlyComplete) || sent.correctedRevision === r.revision) return null;
-    return {
-      key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
-      type: 'correction', end: r.end, state: r.state, name: r.name
-    };
-  }
-
-  if (r.state !== 'active') return null;
-  const notifyAt = r.end + offsetMs;
-  if (notifyAt > now) return null;
-
-  return {
-    key, kind: r.kind, slot: r.slot, generation: r.generation, revision: r.revision,
-    type: now - notifyAt >= 120000 ? 'delayed' : 'normal', end: r.end, state: r.state,
-    name: r.name, offsetMs, advanceMs: offsetMs < 0 ? -offsetMs : 0, early: notifyAt < r.end
-  };
-}
-
-export function manualReservation(s, command, device, now) {
-  if (!command || typeof command.id !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(command.id)
-    || !['create', 'cancel'].includes(command.action)) throw new Error('invalid_manual');
-  const key = `manual:${command.id}`, existing = s.slots[key];
-  if (command.action === 'cancel') {
-    if (!existing) throw new Error('manual_not_found');
-    if (existing.state !== 'complete') {
-      existing.state = 'complete'; existing.end = null; existing.revision++;
-      existing.observation = { device, session: command.id, seq: existing.revision, receivedAt: now };
-      history(s, now, 'manual_cancel', { key, name: existing.name });
-    }
-    return { key, reservation: structuredClone(existing), status: 'cancelled' };
-  }
-  if (existing) return { key, reservation: structuredClone(existing), status: 'duplicate' };
-  if (typeof command.title !== 'string' || command.title.trim().length < 1 || command.title.length > 80) throw new Error('invalid_manual');
-  const end = command.mode === 'minutes' && Number.isInteger(command.minutes) && command.minutes >= 1 && command.minutes <= 525600
-    ? now + command.minutes * 60000 : command.mode === 'datetime' ? command.end : null;
-  if (!Number.isSafeInteger(end) || end <= now || end > now + 366 * 86400000) throw new Error('invalid_manual');
-  if (Object.values(s.slots).filter(r => r.kind === 'manual' && r.state === 'active' && !r.sent).length >= 10) throw new Error('manual_limit');
-  const r = { kind: 'manual', slot: null, name: command.title.trim(), state: 'active', action: 'start',
-    end, subject: null, generation: 1, revision: 1, sent: null,
-    observation: { device, session: command.id, seq: 1, receivedAt: now } };
-  s.slots[key] = r;
-  history(s, now, 'manual_create', { key, name: r.name, end });
-  return { key, reservation: structuredClone(r), status: 'applied' };
-}
-
-export function claimDelivery(s, now, token) {
-  if (s.authBlocked) return null;
-  let d = s.delivery;
-  if (d && (d.leaseUntil > now || d.nextTry > now)) return null;
-
-  const offsetSec = getOffsetSec(s);
-
-  if (d) {
-    for (const item of d.uncertain ? d.items : []) {
-      const r = s.slots[item.key];
-      if (r && r.kind !== 'akashi' && r.generation === item.generation && !r.sent) {
-        r.sent = { generation: item.generation, revision: item.revision, end: item.end, offsetMs: item.offsetMs || 0, uncertain: true };
+    for (const event of timer.events) for (const provider of ['discord', 'telegram']) {
+      if (!enabled || !s.settings.providers[provider]) continue;
+      const jobs = Object.values(s.deliveries).filter(d => d.timerId === timer.id && d.eventId === event.id && d.provider === provider);
+      const sent = jobs.filter(d => d.status === 'sent');
+      const latest = sent.reduce((last, d) => !last || d.revision > last.revision ? d : last, null);
+      const corrected = latest && (latest.eventEndAt !== event.endAt || latest.item.state !== timer.state);
+      const make = (type, dueAt) => {
+        const id = `${event.id}:${timer.revision}:${type}:${provider}`;
+        let d = s.deliveries[id];
+        if (!d) d = s.deliveries[id] = { id, timerId: timer.id, eventId: event.id, revision: timer.revision,
+          provider, phase: event.phase, type, eventEndAt: event.endAt, item: structuredClone(timer),
+          status: 'pending', dueAt, nextTryAt: 0, leaseUntil: 0, attempts: 0, createdAt: now };
+        if (d.status === 'cancelled') { d.status = 'pending'; d.leaseUntil = 0; }
+        if (d.status === 'pending') { d.dueAt = dueAt; d.item = structuredClone(timer); }
+      };
+      if (corrected && timer.suppressedRevision !== timer.revision && !sent.some(d => d.revision === timer.revision)) make('correction', now);
+      if (timer.state === 'active' && Number.isSafeInteger(event.endAt) && !sent.some(d => d.type === 'notification')) {
+        make('notification', event.endAt + (timer.kind === 'manual' ? 0 : s.settings.offsetSec * 1000));
       }
     }
-    const stillCurrent = d.items.filter(i => {
-      const r = s.slots[i.key]; return r && r.generation === i.generation && r.revision === i.revision;
-    });
-    if (!stillCurrent.length) { s.delivery = null; d = null; }
+  }
+}
+export function updateTimer(s, input, now, reason = 'observation') {
+  const old = s.timers[input.id];
+  const changed = !old || JSON.stringify([old.name, old.state, old.events]) !== JSON.stringify([input.name, input.state, input.events]);
+  const revision = (old?.revision || 0) + (changed ? 1 : 0);
+  s.timers[input.id] = { ...input, revision, updatedAt: changed ? now : old.updatedAt,
+    suppressedRevision: reason === 'settings' && changed ? revision : old?.suppressedRevision ?? null, notifyAt: null };
+  reconcile(s, now);
+}
+export function applySettings(s, patch, now) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch) ||
+    Object.keys(patch).some(k => !['offsetSec', 'providers', 'categories', 'hideBuildName'].includes(k))) throw new Error('invalid_settings');
+  const next = structuredClone(s.settings);
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'offsetSec') { if (!Number.isInteger(value) || Math.abs(value) > 3600) throw new Error('invalid_settings'); }
+    else if (key === 'hideBuildName') { if (typeof value !== 'boolean') throw new Error('invalid_settings'); }
     else {
-      d.items = stillCurrent.map(i => i.kind === 'akashi' ? itemFor(i.key, s.slots[i.key], now, offsetSec) : i).filter(Boolean);
-      if (!d.items.length) { s.delivery = null; d = null; }
+      if (!value || Array.isArray(value) || typeof value !== 'object' || Object.entries(value).some(([k, v]) => !Object.hasOwn(next[key], k) || typeof v !== 'boolean')) throw new Error('invalid_settings');
+      Object.assign(next[key], value); continue;
     }
+    next[key] = value;
   }
-
-  if (!d) {
-    const items = Object.entries(s.slots).map(([k, r]) => itemFor(k, r, now, offsetSec)).filter(Boolean);
-    if (!items.length) return null;
-    d = { id: token, items, attempt: 0, nextTry: 0, leaseUntil: 0 };
-  }
-
-  d.token = token; d.leaseUntil = now + 60000; d.attempt += 1; d.uncertain = true;
-  s.delivery = d;
-  return structuredClone(d);
+  s.settings = next;
+  for (const d of Object.values(s.deliveries)) if (patch.providers?.[d.provider] === true && d.status === 'failed') { d.status = 'pending'; d.nextTryAt = now; }
+  record(s, now, 'settings_changed');
 }
-
-export function finishDelivery(s, token, now, result) {
-  const d = s.delivery;
-  if (!d || d.token !== token) return false;
-  if (result.ok) {
-    for (const item of d.items) {
-      const r = s.slots[item.key];
-      if (r && r.generation === item.generation) {
-        if (item.kind === 'akashi' && r.repair?.start === item.repair.start) {
-          r.repairSent = [...new Set([...(r.repairSent || []), ...item.milestones])];
-        }
-        r.sent = {
-          generation: item.generation, revision: item.revision, end: item.end,
-          offsetMs: item.offsetMs || 0, correctedRevision: item.type === 'correction' ? item.revision : null
-        };
-      }
-      history(s, now, 'sent', { ...item, deliveryType: item.type, messageId: result.messageId || null });
-    }
-    s.delivery = null;
-  } else {
-    d.leaseUntil = 0;
-    d.uncertain = !!result.uncertain;
-    d.nextTry = now + Math.max(retryDelay(d.attempt), result.retryAfter || 0);
-    s.authBlocked = !!result.permanent;
-    history(s, now, 'send_error', { code: result.code || 'transport', attempt: d.attempt });
-  }
-  prune(s, now);
-  return true;
+export function createManual(s, command, now) {
+  if (!command || !validId(command.requestId) || typeof command.name !== 'string' || !command.name.trim() || command.name.length > 80 ||
+    Object.keys(command).some(k => !['requestId', 'name', 'endAt', 'minutes'].includes(k)) ||
+    Object.hasOwn(command, 'endAt') === Object.hasOwn(command, 'minutes')) throw new Error('invalid_manual');
+  const id = 'manual:' + command.requestId;
+  if (s.timers[id]) return s.timers[id];
+  const endAt = command.endAt ?? now + command.minutes * 60000;
+  if (command.minutes !== undefined && (!Number.isInteger(command.minutes) || command.minutes < 1) ||
+    !Number.isSafeInteger(endAt) || endAt <= now || endAt > now + 365 * 86400000) throw new Error('invalid_manual');
+  if (Object.values(s.timers).filter(t => t.kind === 'manual' && t.state === 'active').length >= 100) throw new Error('manual_limit');
+  updateTimer(s, { id, kind: 'manual', slot: null, state: 'active', name: command.name.trim(), endAt, events: [{ id: command.requestId + '-manual', phase: 'complete', endAt }] }, now);
+  return s.timers[id];
 }
-
-export function nextDeliveryAt(state, now) {
-  return timerNextDeliveryAt(state, now, claimDelivery);
+export function cancelManual(s, id, now) {
+  const timer = s.timers['manual:' + id];
+  if (!timer) throw new Error('manual_not_found');
+  if (timer.state !== 'cancelled') updateTimer(s, { ...timer, state: 'cancelled', endAt: null, events: timer.events.map(e => ({ ...e, endAt: null })) }, now);
+  return s.timers[timer.id];
 }

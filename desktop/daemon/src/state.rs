@@ -3,54 +3,53 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusResponse {
-    pub now: u64,
-    pub slots: HashMap<String, SlotItem>,
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StatusSettings {
+    #[serde(default, rename = "offsetSec")]
+    pub offset_sec: i64,
     #[serde(default)]
-    pub auth_blocked: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AkashiShip {
-    pub id: u64,
-    pub name: String,
-    pub hp: u32,
-    pub max: u32,
-    pub repair: u64,
-    #[serde(rename = "mod", default = "default_mod")]
-    pub mod_val: f64,
-}
-
-fn default_mod() -> f64 {
-    1.0
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AkashiRepairData {
-    pub start: u64,
+    pub providers: HashMap<String, bool>,
     #[serde(default)]
-    pub ships: Vec<AkashiShip>,
+    pub categories: HashMap<String, bool>,
+    #[serde(default, rename = "hideBuildName")]
+    pub hide_build_name: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SlotItem {
+pub struct TimerEvent {
+    pub id: String,
+    pub phase: String,
+    #[serde(default, rename = "endAt")]
+    pub end_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimerItem {
+    pub id: String,
     pub kind: String,
     #[serde(default)]
     pub slot: Option<u32>,
-    pub state: String,
-    #[serde(default)]
-    pub end: Option<u64>,
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
-    pub subject: Option<serde_json::Value>,
-    #[serde(default)]
-    pub generation: Option<u64>,
+    pub state: String,
+    #[serde(default, rename = "endAt")]
+    pub end_at: Option<u64>,
+    #[serde(default, rename = "notifyAt")]
+    pub notify_at: Option<u64>,
     #[serde(default)]
     pub revision: Option<u64>,
     #[serde(default)]
-    pub repair: Option<AkashiRepairData>,
+    pub events: Vec<TimerEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusResponse {
+    #[serde(default)]
+    pub revision: Option<u64>,
+    pub now: u64,
+    pub settings: StatusSettings,
+    #[serde(default)]
+    pub timers: Vec<TimerItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -58,7 +57,10 @@ pub struct DaemonState {
     pub updated_at: u64,
     pub is_running: bool,
     pub pid: Option<u32>,
-    pub slots: HashMap<String, SlotItem>,
+    #[serde(default)]
+    pub offset_sec: i64,
+    #[serde(default)]
+    pub timers: Vec<TimerItem>,
     pub notified_keys: Vec<String>,
     pub last_error: Option<String>,
 }

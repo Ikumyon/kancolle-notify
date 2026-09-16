@@ -1,135 +1,76 @@
-const form = document.querySelector('#settings'), notice = document.querySelector('#notice');
-const button = form.querySelector('button'), saved = document.querySelector('#saved-state'), connection = document.querySelector('#connection-state');
-const testModeCheck = document.querySelector('#test-mode'), testModeBox = document.querySelector('#test-mode-box');
-const urlInput = document.querySelector('#url'), tokenInput = document.querySelector('#token');
-
-const TEST_URL = 'http://127.0.0.1:8787';
-const TEST_TOKEN = 'test-mode-fixed-token-for-dev-server-only-12345';
-
-function storage(method, value) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('設定保存領域から応答がありません。拡張を再読み込みしてください。')), 5000);
-    try {
-      chrome.storage.local[method](value, result => {
-        clearTimeout(timer);
-        const error = chrome.runtime.lastError;
-        if (error) reject(new Error(error.message)); else resolve(result);
-      });
-    } catch (e) { clearTimeout(timer); reject(e); }
+import { readFatigueTarget, readFatiguePresets } from './fatigue-settings.js';
+import { settingsPatch } from './notification-settings.js';
+const $ = selector => document.querySelector(selector);
+const call = async (type, extra = {}) => {
+  const r = await chrome.runtime.sendMessage({ type, ...extra });
+  if (r?.error) throw new Error(r.error); return r.value;
+};
+const notice = text => { $('#notice').textContent = text; };
+async function action(fn) { try { await fn(); } catch (e) { notice('操作に失敗しました: ' + e.message); } }
+async function loadSettings() {
+  const s = await call('settings');
+  $('#offset').value = s.offsetSec; $('#hide-build').checked = s.hideBuildName;
+  for (const input of document.querySelectorAll('[data-provider]')) input.checked = s.providers[input.dataset.provider];
+  for (const input of document.querySelectorAll('[data-category]')) input.checked = s.categories[input.dataset.category];
+  $('#settings-fields').disabled = false;
+}
+async function loadManual() {
+  const { reservations } = await call('manual-list'), list = $('#manual-list'); list.replaceChildren();
+  for (const r of reservations) {
+    const row = document.createElement('p');
+    row.textContent = r.name + ' ・ ' + (r.endAt ? new Date(r.endAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '') + ' ・ ' + ({ active: '予約中', cancelled: '取消済み', complete: '完了' }[r.state] || r.state);
+    if (r.state === 'active') {
+      const button = document.createElement('button'); button.textContent = '取消';
+      button.addEventListener('click', () => action(async () => { await call('manual-cancel', { id: r.id.slice(7) }); await loadManual(); notice('取り消しました'); }));
+      row.append(button);
+    }
+    list.append(row);
+  }
+  if (!reservations.length) list.textContent = '手動予約はありません';
+}
+$('#connection-form').addEventListener('submit', event => {
+  event.preventDefault(); void action(async () => {
+    await call('configure', { url: $('#url').value, token: $('#token').value });
+    notice('接続情報を保存しました'); await loadSettings(); await loadManual();
   });
-}
-
-function updateUiForMode(isTest, config, productionConfig) {
-  testModeCheck.checked = isTest;
-  testModeBox?.classList.toggle('active', isTest);
-  if (isTest) {
-    urlInput.value = TEST_URL;
-    urlInput.disabled = true;
-    tokenInput.value = '';
-    tokenInput.placeholder = 'テスト用固定トークンを使用中';
-    tokenInput.disabled = true;
-    tokenInput.required = false;
-    button.disabled = true;
-    saved.textContent = `保存済み：${TEST_URL}（テストモード・固定接続）`;
-    saved.className = 'good';
-  } else {
-    urlInput.value = config?.url || productionConfig?.url || '';
-    urlInput.disabled = false;
-    tokenInput.placeholder = '';
-    tokenInput.disabled = false;
-    tokenInput.required = true;
-    button.disabled = false;
-    button.textContent = '保存';
-    saved.textContent = config ? `保存済み：${config.url}（トークン登録済み）` : '未保存';
-    saved.className = config ? 'good' : '';
-  }
-}
-
-const hideBuildNameCheck = document.querySelector('#hide-build-name');
-const displayNotice = document.querySelector('#display-notice');
-
-storage('get', ['config', 'productionConfig', 'testMode', 'hideBuildName']).then(r => {
-  const isTest = r.testMode === true || r.config?.url === TEST_URL;
-  updateUiForMode(isTest, r.config, r.productionConfig);
-  if (hideBuildNameCheck) {
-    hideBuildNameCheck.checked = !!r.hideBuildName;
-  }
-  connection.textContent = '送信時に接続します';
-}).catch(e => { saved.textContent = '保存状態を確認できません'; notice.textContent = e.message; });
-
-hideBuildNameCheck?.addEventListener('change', async () => {
-  const hide = hideBuildNameCheck.checked;
-  try {
-    await storage('set', { hideBuildName: hide });
-    if (displayNotice) {
-      displayNotice.textContent = hide ? '建造中の艦名を隠すように設定しました。' : '建造中の艦名を表示するように設定しました。';
-      setTimeout(() => { if (displayNotice.textContent.includes('設定しました')) displayNotice.textContent = ''; }, 3000);
-    }
-  } catch (e) {
-    if (displayNotice) {
-      displayNotice.className = 'error';
-      displayNotice.textContent = `保存失敗：${e.message}`;
-    }
-  }
 });
-
-testModeCheck?.addEventListener('change', async () => {
-  const isTest = testModeCheck.checked;
-  notice.textContent = isTest ? 'テストモードへ切り替え中…' : '通常モードへ復元中…';
-  try {
-    const current = await storage('get', ['config', 'productionConfig']);
-    if (isTest) {
-      const prod = (current.config && current.config.url !== TEST_URL) ? current.config : current.productionConfig;
-      await storage('set', {
-        testMode: true,
-        productionConfig: prod || null,
-        config: { url: TEST_URL, token: TEST_TOKEN },
-        blocked: false, retryPending: false, attempt: 0, lastError: ''
-      });
-      updateUiForMode(true, { url: TEST_URL, token: TEST_TOKEN }, prod);
-      notice.textContent = 'テストモードに切り替えました。接続先をローカル疑似環境（127.0.0.1:8787）に固定しました。';
-      connection.textContent = '送信時に接続します';
-    } else {
-      const restored = current.productionConfig || null;
-      await storage('set', {
-        testMode: false,
-        config: restored,
-        blocked: false, retryPending: false, attempt: 0, lastError: ''
-      });
-      updateUiForMode(false, restored, null);
-      connection.textContent = '送信時に接続します';
-      connection.className = '';
-      notice.textContent = '通常モード（本番設定）に復帰しました。';
-    }
-  } catch (e) {
-    notice.textContent = `切り替えエラー：${e.message}`;
-  }
+$('#calculation-form').addEventListener('submit', event => {
+  event.preventDefault(); void action(async () => {
+    await call('calculation-settings', { patch: { fatigueTarget: readFatigueTarget($('#fatigue-target')), fatiguePresets: readFatiguePresets($('#fatigue-presets')) } });
+    notice('拡張へ保存し、回復予定を再計算しました');
+  });
 });
-
-form.addEventListener('invalid', () => { notice.textContent = 'URLと32文字以上の接続トークンを入力してください。'; }, true);
-form.addEventListener('input', () => { button.textContent = '保存'; });
-form.addEventListener('submit', async event => {
-  event.preventDefault();
-  button.disabled = true; button.textContent = '保存中…'; notice.textContent = '設定を保存しています…';
-  let persisted = false;
-  try {
-    const url = new URL(urlInput.value.trim());
-    const local = ['localhost', '127.0.0.1'].includes(url.hostname);
-    if (!(url.protocol === 'https:' && url.hostname.endsWith('.workers.dev') || url.protocol === 'http:' && local)
-      || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('WorkersのURL、またはローカル検証用URLを入力してください。');
-    const token = tokenInput.value.trim();
-    if (!/^[A-Za-z0-9_-]{32,200}$/.test(token)) throw new Error('接続トークンの形式を確認してください。');
-    const config = { url: url.origin, token };
-    await storage('set', { config, productionConfig: config, testMode: false, blocked: false, retryPending: false, attempt: 0, lastError: '' });
-    const stored = await storage('get', ['config']);
-    if (stored?.config?.url !== url.origin || stored.config.token !== token) throw new Error('保存結果を確認できません');
-    persisted = true;
-    saved.textContent = `保存済み：${stored.config.url}（トークン登録済み）`; saved.className = 'good';
-    button.textContent = '保存済み'; notice.textContent = '設定を保存しました。';
-    tokenInput.value = '';
-    connection.textContent = '送信時に接続します';
-  } catch (e) {
-    notice.textContent = `${persisted ? '設定は保存済みです' : '保存できませんでした'}：${e.message}`;
-    button.textContent = persisted ? '保存済み' : '保存';
-  } finally { button.disabled = false; }
+$('#settings-form').addEventListener('submit', event => {
+  event.preventDefault(); void action(async () => {
+    await call('settings', { patch: settingsPatch(document) });
+    notice('中央へ保存しました');
+  });
+});
+$('#reload-settings').addEventListener('click', () => action(async () => { await loadSettings(); notice('通知設定を取得しました'); }));
+$('#reload-manual').addEventListener('click', () => action(loadManual));
+$('#manual-mode').addEventListener('change', () => {
+  const absolute = $('#manual-mode').value === 'absolute';
+  $('#absolute-label').hidden = !absolute; $('#minutes-label').hidden = absolute;
+  $('#absolute').required = absolute; $('#minutes').required = !absolute;
+});
+let pending = null, sending = false;
+$('#manual-form').addEventListener('submit', event => {
+  event.preventDefault(); if (sending) return;
+  void action(async () => {
+    const form = { name: $('#manual-name').value, ...($('#manual-mode').value === 'minutes'
+      ? { minutes: Number($('#minutes').value) } : { endAt: Date.parse($('#absolute').value + '+09:00') }) };
+    if (!pending || JSON.stringify(pending.form) !== JSON.stringify(form)) pending = { form, requestId: crypto.randomUUID() };
+    sending = true;
+    try {
+      await call('manual-create', { command: { ...pending.form, requestId: pending.requestId } });
+      pending = null; $('#manual-form').reset(); notice('予約しました'); await loadManual();
+    } finally { sending = false; }
+  });
+});
+void action(async () => {
+  const local = await call('calculation-settings');
+  $('#fatigue-target').value = local.fatigueTarget; $('#fatigue-presets').value = local.fatiguePresets.join(', ');
+  const connection = await call('connection'); $('#url').value = connection.url; $('#token').value = connection.token;
+  if (connection.url) { await loadSettings(); await loadManual(); }
+  else notice('接続情報を登録すると、中央の通知設定と手動予約を取得できます。');
 });

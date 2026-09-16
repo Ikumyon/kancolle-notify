@@ -8,10 +8,6 @@ pub struct Config {
     pub server_url: String,
     #[serde(default = "default_token")]
     pub token: String,
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_sec: u64,
-    #[serde(default = "default_advance_sec")]
-    pub notify_advance_sec: u64,
     #[serde(default = "default_sound")]
     pub play_sound: bool,
 }
@@ -24,14 +20,6 @@ fn default_token() -> String {
     "".to_string()
 }
 
-fn default_poll_interval() -> u64 {
-    30
-}
-
-fn default_advance_sec() -> u64 {
-    0 // 0 = ジャスト, 60 = 1分前
-}
-
 fn default_sound() -> bool {
     true
 }
@@ -41,8 +29,6 @@ impl Default for Config {
         Self {
             server_url: default_server_url(),
             token: default_token(),
-            poll_interval_sec: default_poll_interval(),
-            notify_advance_sec: default_advance_sec(),
             play_sound: default_sound(),
         }
     }
@@ -76,12 +62,6 @@ pub fn set_value(key: &str, val: &str) -> Result<Config, String> {
     match key {
         "server_url" => cfg.server_url = val.to_string(),
         "token" => cfg.token = val.to_string(),
-        "poll_interval_sec" | "poll_interval" | "interval" => {
-            cfg.poll_interval_sec = val.parse::<u64>().map_err(|_| "有効な秒数（整数）を指定してください".to_string())?;
-        }
-        "notify_advance_sec" | "notify_advance" | "advance" => {
-            cfg.notify_advance_sec = val.parse::<u64>().map_err(|_| "有効な秒数（整数）を指定してください".to_string())?;
-        }
         "play_sound" | "sound" => {
             cfg.play_sound = match val.to_lowercase().as_str() {
                 "true" | "1" | "yes" | "on" => true,
@@ -89,7 +69,7 @@ pub fn set_value(key: &str, val: &str) -> Result<Config, String> {
                 _ => return Err("true または false を指定してください".to_string()),
             };
         }
-        _ => return Err(format!("未知の設定キーです: {} (使用可能: server_url, token, poll_interval, notify_advance, play_sound)", key)),
+        _ => return Err(format!("未知の設定キーです: {} (使用可能: server_url, token, play_sound)", key)),
     }
     save_config(&cfg).map_err(|e| format!("設定ファイルの保存に失敗しました: {}", e))?;
     Ok(cfg)

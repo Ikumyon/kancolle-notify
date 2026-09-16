@@ -8,7 +8,9 @@ export class Repository {
     await this.db.prepare('INSERT OR IGNORE INTO account_state(id,revision,body) VALUES(?,0,?)')
       .bind('owner', JSON.stringify(emptyState())).run();
     const row = await this.db.prepare('SELECT revision,body FROM account_state WHERE id=?').bind('owner').first();
-    return { revision: row.revision, state: JSON.parse(row.body) };
+    const state = JSON.parse(row.body);
+    if (state.schema !== 2 || !state.settings || !state.timers || !state.deliveries) throw new Error('initialization_required');
+    return { revision: row.revision, state };
   }
 
   async mutate(fn) {
@@ -41,5 +43,12 @@ export class Repository {
 
   async prune(now) {
     await this.db.prepare('DELETE FROM audit_batches WHERE created_at<?').bind(now - 30 * 86400000).run();
+    await this.mutate(s => {
+      for (const [id, d] of Object.entries(s.deliveries)) {
+        const timer = s.timers[d.timerId];
+        if (['sent', 'cancelled', 'failed'].includes(d.status) && d.createdAt < now - 30 * 86400000 &&
+          (!timer || !timer.events.some(e => e.id === d.eventId))) delete s.deliveries[id];
+      }
+    });
   }
 }

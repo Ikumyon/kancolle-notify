@@ -1,25 +1,11 @@
-import { json, snapshot } from './status.js';
-import { manualReservation } from '../../domain/state.js';
-
-export async function handleManual(request, env, repo, device) {
-  const text = await request.text();
-  if (text.length > 2048) return json({ error: 'invalid_manual' }, 400);
-
-  let command;
-  try {
-    command = JSON.parse(text);
-  } catch {
-    return json({ error: 'invalid_manual' }, 400);
+import { json, readBody } from './status.js';
+import { createManual, cancelManual, validId } from '../../domain/state.js';
+export async function handleManual(request, env, repo, id) {
+  if (request.method === 'GET') return json({ reservations: Object.values((await repo.read()).state.timers).filter(t => t.kind === 'manual') });
+  if (request.method === 'POST') {
+    const command = await readBody(request, 2048);
+    return json({ reservation: await repo.mutate(s => createManual(s, command, Date.now())) });
   }
-
-  try {
-    const now = Date.now();
-    const result = await repo.mutate(s => manualReservation(s, command, device, now));
-    return json({ now, ...result, state: await snapshot(repo) });
-  } catch (e) {
-    if (['invalid_manual', 'manual_limit', 'manual_not_found'].includes(e.message)) {
-      return json({ error: e.message }, 400);
-    }
-    throw e;
-  }
+  if (!validId(id)) throw new Error('invalid_manual');
+  return json({ reservation: await repo.mutate(s => cancelManual(s, id, Date.now())) });
 }
