@@ -92,7 +92,7 @@ jobs:
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config libgl1-mesa-glx libegl1 libxkbcommon-x11-0 libxcb-cursor0
+          sudo apt-get install -y libdbus-1-dev pkg-config libgl1 libegl1 libxkbcommon-x11-0
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
