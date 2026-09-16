@@ -282,10 +282,14 @@
           <div class="step-details">
             <h3 class="step-title">オンラインインストーラーを実行</h3>
             <p class="step-desc">
-              GitHub Releases から超軽量インストーラー（<code>kancolle-notify-setup.exe</code>）をダウンロードして実行します。画面の案内に従って Cloudflare API トークンと通知先（Discord Webhook 等）を入力するだけで、GitHubから最新プログラムを自動取得し、Cloudflare Workers の構築・デプロイまで全自動で行われます。
+              お使いのOSに合わせて超軽量オンラインインストーラーを実行します。画面の案内に従って Cloudflare API トークンと通知先（Discord Webhook 等）を入力するだけで、GitHubから最新のバイナリ・拡張機能を自動取得し、Cloudflare Workers の構築・デプロイまで全自動で行われます。
             </p>
+            <div class="code-snippet" style="margin-bottom: 8px;">
+              <code>【Windows】kancolle-notify-setup.exe をダウンロードして実行</code>
+            </div>
             <div class="code-snippet">
-              <code>kancolle-notify-setup.exe を実行 ➔ 画面の案内に従って入力するだけ！</code>
+              <code>【Linux】curl -fsSL https://raw.githubusercontent.com/Ikumyon/kancolle-notify/main/installer/install.sh | bash</code>
+              <button class="copy-btn" data-clipboard="curl -fsSL https://raw.githubusercontent.com/Ikumyon/kancolle-notify/main/installer/install.sh | bash" title="コピー"><i class="fa-regular fa-copy"></i></button>
             </div>
           </div>
         </div>
@@ -299,7 +303,7 @@
               Chrome または Edge の拡張機能管理画面（<code>chrome://extensions</code>）を開き、右上の「デベロッパーモード」をONにします。「パッケージ化されていない拡張機能を読み込む」をクリックし、インストーラーが自動配置した拡張機能フォルダを選択します。
             </p>
             <div class="code-snippet">
-              <code>chrome://extensions ➔ デベロッパーモード ON ➔ %LOCALAPPDATA%\kancolle-notify\extension を選択</code>
+              <code>Windows: %LOCALAPPDATA%\kancolle-notify\extension<br>Linux: ~/.local/share/kancolle-notify/extension</code>
             </div>
             <p class="step-note" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 8px;">
               ※サーバーURLや接続設定はインストーラーにより自動構成されているため、面倒な初期設定は不要です。
@@ -313,10 +317,10 @@
           <div class="step-details">
             <h3 class="step-title">プレイ開始 ＆ デスクトップで進捗確認</h3>
             <p class="step-desc">
-              バックグラウンドで Rust 製の超軽量デーモンが常駐し、完了時刻に Windows ネイティブのトースト通知や Discord へお知らせします。スタートメニューの「<strong>艦これ 通知管理</strong>」アプリから、遠征や入渠の残り時間をリアルタイムに確認することも可能です！
+              バックグラウンドで Rust 製の超軽量デーモンが常駐し、完了時刻に OS ネイティブのトースト/D-Bus通知や Discord へお知らせします。アプリメニューの「<strong>艦これ 通知管理</strong>」から、遠征や入渠の残り時間をリアルタイムに確認することも可能です！
             </p>
             <div class="code-snippet">
-              <code>スタートメニュー ➔ 「艦これ 通知管理」でタイマー進捗一覧を表示</code>
+              <code>アプリメニュー ➔ 「艦これ 通知管理」でタイマー進捗一覧を表示</code>
             </div>
           </div>
         </div>
@@ -334,7 +338,7 @@
             <div class="code-snippet" style="margin-bottom: 12px;">
               <code>cd server && npm install && npx wrangler deploy</code>
             </div>
-            <p>デプロイ後に払い出された Workers URL を拡張機能のオプション画面および <code>%LOCALAPPDATA%\kancolle-notify\config.json</code> に設定してください。</p>
+            <p>デプロイ後に払い出された Workers URL を拡張機能のオプション画面およびデスクトップ設定ファイル（<code>config.json</code>）に設定してください。</p>
           </div>
         </details>
       </div>
@@ -354,9 +358,13 @@
           <div class="download-buttons">
             <a href="https://github.com/Ikumyon/kancolle-notify/releases/latest/download/kancolle-notify-setup.exe" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-lg">
               <i class="fa-brands fa-windows"></i>
-              <span>インストーラーをダウンロード <span class="js-version-bracket">(v0.9.1-beta)</span></span>
+              <span>Windows用 インストーラー <span class="js-version-bracket">(v0.9.1-beta)</span></span>
             </a>
-            <a href="https://github.com/Ikumyon/kancolle-notify/releases" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-lg">
+            <a href="https://github.com/Ikumyon/kancolle-notify/releases/latest/download/install.sh" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-lg">
+              <i class="fa-brands fa-linux"></i>
+              <span>Linux用 インストーラー (install.sh)</span>
+            </a>
+            <a href="https://github.com/Ikumyon/kancolle-notify/releases" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-lg">
               <i class="fa-brands fa-github"></i>
               <span>Releases 一覧</span>
             </a>
@@ -366,6 +374,7 @@
           <div class="compat-title">動作要件・対応環境</div>
           <ul class="compat-list">
             <li><i class="fa-brands fa-windows"></i> Windows 10 / 11 (64-bit)</li>
+            <li><i class="fa-brands fa-linux"></i> Linux (x86_64 / D-Bus通知対応デスクトップ環境)</li>
             <li><i class="fa-brands fa-chrome"></i> Google Chrome / Chromium 互換ブラウザ</li>
             <li><i class="fa-brands fa-edge"></i> Microsoft Edge</li>
             <li><i class="fa-solid fa-cloud"></i> Cloudflare Workers (Free Plan対応)</li>

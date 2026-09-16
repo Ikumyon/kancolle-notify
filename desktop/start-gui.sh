@@ -1,3 +1,7 @@
 #!/bin/sh
 cd "$(dirname "$0")"
-python3 gui/main.py
+if [ -f "./kancolle-gui" ]; then
+    ./kancolle-gui
+else
+    python3 gui/main.py
+fi
