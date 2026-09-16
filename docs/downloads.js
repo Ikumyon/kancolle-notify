@@ -1,13 +1,12 @@
 "use strict";
 
-// 配布先が決まったら、この5つの空文字列に URL を設定してください。
 // Windows はセットアップ用 .exe、Linux はセットアップ用 .sh を指定します。
 const DOWNLOAD_URLS = Object.freeze({
-  windows: "",
-  linux: "",
-  overlay: "",
-  titleFetcher: "",
-  relay: "",
+  windows: "https://github.com/Ikumyon/kancolle-notify/releases/latest/download/kancolle-notify-setup.exe",
+  linux: "https://github.com/Ikumyon/kancolle-notify/releases/latest/download/install.sh",
+  overlay: "https://github.com/Ikumyon/Kancolle-Stream-Overlay/archive/HEAD.zip",
+  titleFetcher: "https://github.com/Ikumyon/KCO-title-fetcher/archive/refs/heads/main.zip",
+  relay: "https://github.com/Ikumyon/KCO-relay/releases/latest/download/relay_app.exe",
 });
 
 const INSTALLERS = Object.freeze({
@@ -24,17 +23,8 @@ function detectOS(platform, userAgent) {
 }
 
 function updateDownload(link, url, label) {
-  if (url.trim()) {
-    link.href = url;
-    link.removeAttribute("aria-disabled");
-    link.removeAttribute("role");
-    link.textContent = label;
-  } else {
-    link.removeAttribute("href");
-    link.setAttribute("role", "link");
-    link.setAttribute("aria-disabled", "true");
-    link.textContent = "配布先準備中";
-  }
+  link.href = url;
+  link.textContent = label;
 }
 
 const osButtons = document.querySelectorAll("[data-os]");
@@ -57,8 +47,8 @@ for (const button of osButtons) {
 }
 selectOS(detectOS(navigator.userAgentData?.platform || navigator.platform, navigator.userAgent));
 updateDownload(document.getElementById("overlay-download"), DOWNLOAD_URLS.overlay,
-  "オーバーレイをダウンロード");
+  "オーバーレイをダウンロード（ZIP）");
 updateDownload(document.getElementById("fetcher-download"), DOWNLOAD_URLS.titleFetcher,
-  "KCO-title-fetcher をダウンロード");
+  "KCO-title-fetcher をダウンロード（ZIP）");
 updateDownload(document.getElementById("relay-download"), DOWNLOAD_URLS.relay,
-  "KCO-relay をダウンロード");
+  "KCO-relay をダウンロード（EXE）");

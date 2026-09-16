@@ -53,9 +53,10 @@
             <button type="button" data-os="linux" aria-pressed="false" aria-controls="windows-guide linux-guide" disabled>Linux</button>
           </div>
           <p class="download-meta" id="notify-file" aria-live="polite">Windows 用 · kancolle-notify-setup.exe</p>
-          <a class="download-button" id="notify-download" role="link" aria-disabled="true">配布先準備中</a>
+          <a class="download-button" id="notify-download" href="https://github.com/Ikumyon/kancolle-notify/releases/latest/download/kancolle-notify-setup.exe">Windows 用セットアップをダウンロード</a>
           <p class="download-note">別の OS 用も、上のボタンから選べます。</p>
-          <noscript><p class="notice">JavaScript が無効のため OS 切り替えは利用できません。Windows 用 .exe・Linux 用 .sh はどちらも配布先準備中です。以下に両 OS の導入手順を掲載しています。</p></noscript>
+          <a class="source-link" href="https://github.com/Ikumyon/kancolle-notify">ソースコードを見る（GitHub）</a>
+          <noscript><p class="notice">JavaScript が無効のため OS 切り替えは利用できません。<a href="https://github.com/Ikumyon/kancolle-notify/releases/latest/download/kancolle-notify-setup.exe">Windows 用セットアップ（.exe）</a>・<a href="https://github.com/Ikumyon/kancolle-notify/releases/latest/download/install.sh">Linux 用セットアップ（.sh）</a>からダウンロードしてください。以下に両 OS の導入手順を掲載しています。</p></noscript>
         </div>
         <details class="guide disclosure" id="windows-guide">
           <summary>Windows の導入手順</summary>
@@ -79,15 +80,16 @@
           <h3>配置とタイマーを自分の使い方に</h3>
           <p>情報パネルとコントロールパネルは、ドラッグで移動・リサイズできます。設定は保存されるため、次回も同じレイアウトを使えます。手動タイマーは時間指定やプリセット、完了通知に対応しています。</p>
           <h3>必要な連携だけ追加</h3>
-          <p>Cloudflare 連携を設定すると、通知側で管理している遠征・入渠・疲労回復などのタイマーを選んで表示できます。BGM 名や戦果情報を受け取り、表示に反映する機能も備えています。BGM 表示には、<a href="#related">KCO-title-fetcher と KCO-relay の両方</a>を追加して利用します。</p>
+          <p>Cloudflare 連携を設定すると、通知側で管理している遠征・入渠・疲労回復などのタイマーを選んで表示できます。BGM 名を受け取り、表示に反映する機能も備えています。BGM 表示には、<a href="#related">KCO-title-fetcher と KCO-relay の両方</a>を追加して利用します。</p>
           <p>まずは表示と手動タイマーから使い始め、クラウドタイマーの取得が必要になったら通知側との連携を設定できます。</p>
         </details>
         <div class="download-area">
           <p class="small-label">ブラウザ拡張機能をダウンロード</p>
           <div class="platform-label">Windows / Linux 共通 <span>Chrome・Edge</span></div>
           <p class="download-meta">展開して読み込むブラウザ拡張機能</p>
-          <a class="download-button" id="overlay-download" role="link" aria-disabled="true">配布先準備中</a>
+          <a class="download-button" id="overlay-download" href="https://github.com/Ikumyon/Kancolle-Stream-Overlay/archive/HEAD.zip">オーバーレイをダウンロード（ZIP）</a>
           <p class="download-note">Cloudflare 連携は、必要に応じて設定できます。</p>
+          <a class="source-link" href="https://github.com/Ikumyon/Kancolle-Stream-Overlay">ソースコードを見る（GitHub）</a>
         </div>
         <details class="guide disclosure">
           <summary>オーバーレイの導入手順</summary>
@@ -106,28 +108,37 @@
           <h2 id="fetcher-title">KCO-title-fetcher</h2>
           <p class="tool-lead">BGM 名として表示するタイトルを取得。</p>
           <details class="tool-details disclosure"><summary>詳しい機能説明</summary><p>動画共有サイトのタイトルを取得する JavaScript 製のツールです。タイトル取得時にサーバーへ負荷をかけないことを特徴としています。</p><h3>担当する役割</h3><p>オーバーレイの BGM 表示に使う動画タイトルを取得します。取得したタイトルをオーバーレイに届けるため、KCO-relay も一緒に導入してください。</p></details>
-          <div class="download-area"><p class="small-label">KCO-title-fetcher をダウンロード</p><a class="download-button" id="fetcher-download" role="link" aria-disabled="true">配布先準備中</a><p class="download-note">対応サイト・導入手順は、配布情報の確認後に掲載します。</p></div>
+          <div class="download-area"><p class="small-label">KCO-title-fetcher をダウンロード</p><a class="download-button" id="fetcher-download" href="https://github.com/Ikumyon/KCO-title-fetcher/archive/refs/heads/main.zip">KCO-title-fetcher をダウンロード（ZIP）</a><p class="download-note">ZIP を展開して利用します。導入手順は <a href="https://github.com/Ikumyon/KCO-title-fetcher#readme">README</a> を確認してください。</p><a class="source-link" href="https://github.com/Ikumyon/KCO-title-fetcher">ソースコードを見る（GitHub）</a></div>
         </article>
         <article class="tool-card overlay-card" id="relay" aria-labelledby="relay-title">
           <div class="card-top"><span class="tag">BGM 表示用 · データ中継</span><span class="number">04</span></div>
           <h2 id="relay-title">KCO-relay</h2>
           <p class="tool-lead">取得したタイトルをオーバーレイへ中継。</p>
-          <details class="tool-details disclosure"><summary>詳しい機能説明</summary><p>拡張機能どうしでデータを受け渡すための Python 製ツールです。BGM 表示では、KCO-title-fetcher が取得したタイトルをオーバーレイへ中継します。title-fetcher と同時に導入して利用します。</p><h3>文字の読み取りも補助</h3><p>中継機能に加えて OCR にも対応しています。OCR は画像内の文字を読み取る機能です。受け渡す情報や読み取り対象に合わせて利用します。</p></details>
-          <div class="download-area"><p class="small-label">KCO-relay をダウンロード</p><a class="download-button" id="relay-download" role="link" aria-disabled="true">配布先準備中</a><p class="download-note">起動方法・連携設定は、配布情報の確認後に掲載します。</p></div>
+          <details class="tool-details disclosure"><summary>詳しい機能説明</summary><p>拡張機能どうしでデータを受け渡すための Python 製ツールです。BGM 表示では、KCO-title-fetcher が取得したタイトルをオーバーレイへ中継します。title-fetcher と同時に導入して利用します。</p></details>
+          <div class="download-area"><p class="small-label">KCO-relay をダウンロード</p><a class="download-button" id="relay-download" href="https://github.com/Ikumyon/KCO-relay/releases/latest/download/relay_app.exe">KCO-relay をダウンロード（EXE）</a><p class="download-note">最新リリースの relay_app.exe をダウンロードします。配布情報は <a href="https://github.com/Ikumyon/KCO-relay/releases/latest">リリースページ</a> を確認してください。</p><a class="source-link" href="https://github.com/Ikumyon/KCO-relay">ソースコードを見る（GitHub）</a></div>
         </article>
       </div>
     </section>
 
     <section class="connection" id="connect" aria-labelledby="connect-title">
-      <div><h2 id="connect-title">Cloudflare タイマー連携 <span class="optional">任意</span></h2><p>通知側の Cloudflare タイマーを、<br>オーバーレイでも確認できます。</p></div>
-      <details class="disclosure connection-guide"><summary>Cloudflare 連携の設定手順</summary><ol><li>通知側のセットアップを完了し、Worker URL と認証トークンを用意します。</li><li>オーバーレイの設定画面で「タイマー」タブを開き、「Cloudflare連携」を ON にして入力・保存します。</li><li>コントロールパネルの「☁」から、表示したいクラウドタイマーを選びます。</li></ol></details>
+      <div class="connection-heading">
+        <h2 id="connect-title">Cloudflare タイマー連携</h2>
+        <span class="optional">任意</span>
+      </div>
+      <p class="connection-intro">通知側の Cloudflare タイマーを、オーバーレイでも確認できます。</p>
+      <details class="disclosure connection-guide"><summary>Cloudflare 連携の設定手順</summary>
+        <ol class="connection-steps">
+          <li><h3>通知側をセットアップ</h3><p>通知側のセットアップを完了し、Worker URL と認証トークンを用意します。</p></li>
+          <li><h3>オーバーレイに接続</h3><p>オーバーレイの設定画面で「タイマー」タブを開き、「Cloudflare連携」を ON にして入力・保存します。</p></li>
+          <li><h3>表示するタイマーを選択</h3><p>コントロールパネルの「☁」から、表示したいクラウドタイマーを選びます。</p></li>
+        </ol>
+      </details>
     </section>
     <section class="faq" aria-labelledby="faq-title">
       <h2 id="faq-title">導入前によくある疑問</h2>
       <details><summary>4つすべてを入れる必要がありますか？</summary><p>使いたい機能に合わせて選んでください。通知を使うなら kancolle-notify、画面表示や手動タイマーを使うならオーバーレイから始められます。オーバーレイで BGM 名も表示する場合は、KCO-title-fetcher と KCO-relay の両方を追加してください。この2つは BGM 表示機能のための補助ツールです。</p></details>
       <details><summary>PC を閉じても通知されますか？</summary><p>通知側から Cloudflare へ送信済みのタイマーは、設定した Discord・Telegram へ通知できます。PC 上のデスクトップ通知とオーバーレイ表示には、PC と各プログラムの起動が必要です。</p></details>
       <details><summary>Windows から Linux 用をダウンロードできますか？</summary><p>できます。通知のダウンロード欄で「Linux」に切り替えると、セットアップ用 .sh と Linux の導入手順を表示します。Linux から Windows 用 .exe を選ぶこともできます。</p></details>
-      <details><summary>「配布先準備中」と表示されるのはなぜですか？</summary><p>現在、このページのダウンロードリンクを準備しています。配布先が設定されると、各ツールのダウンロードボタンが利用できるようになります。</p></details>
     </section>
     <aside class="about"><h2>このツールについて</h2><p>本ツールは非公式のファンメイドツールです。DMM GAMES および「艦これ」運営とは関係ありません。通知機能はブラウザが受信したゲーム通信を読み取って動作します。クラウド通知には Cloudflare の設定が必要です。</p></aside>
   </main>
