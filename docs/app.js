@@ -106,7 +106,35 @@
     }
   }
 
-  fetchLatestRelease();
+  // 6. Detect OS and Highlight Primary Download Button
+  function detectAndHighlightOS() {
+    const ua = navigator.userAgent || '';
+    const platform = navigator.platform || '';
+    const isLinux = (ua.includes('Linux') || platform.includes('Linux')) && !ua.includes('Android');
+
+    if (isLinux) {
+      const winBtn = document.getElementById('btn-download-win');
+      const linuxBtn = document.getElementById('btn-download-linux');
+      if (winBtn && linuxBtn) {
+        // Linux用ボタンを青色（プライマリ）に切り替え
+        linuxBtn.classList.remove('btn-outline');
+        linuxBtn.classList.add('btn-primary');
+
+        // Windows用ボタンをアウトラインに切り替え
+        winBtn.classList.remove('btn-primary');
+        winBtn.classList.add('btn-outline');
+
+        // Linux用ボタンを先頭（一番目立つ位置）に並び替え
+        const parent = linuxBtn.parentElement;
+        if (parent) {
+          parent.insertBefore(linuxBtn, winBtn);
+        }
+      }
+    }
+  }
+
+  detectAndHighlightOS();
 
 })();
+
 
