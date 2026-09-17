@@ -1,7 +1,7 @@
 import { observationRows } from './parser.js';
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const num = (o, key) => Number(o.request[key]);
-export const emptyGame = () => ({ ships: {}, fleets: {}, repair: {}, build: {}, gears: {}, shipMasters: {}, missionMasters: {}, gearMasters: {}, portReady: false, away: {}, akashiAt: {} });
+export const emptyGame = () => ({ ships: {}, fleets: {}, repair: {}, build: {}, gears: {}, shipMasters: {}, missionMasters: {}, gearMasters: {}, portReady: false, away: {}, akashiAt: {}, portSupplyAt: {} });
 export function applyGameObservation(g, o) {
   const rows = observationRows(o.api, structuredClone(o.response)), at = o.responseDate;
   const port = o.api === 'api_port/port';
@@ -9,8 +9,8 @@ export function applyGameObservation(g, o) {
     ['api_req_hensei/change', 'api_req_hensei/preset_select', 'api_req_nyukyo/start', 'api_req_nyukyo/speedchange',
       'api_req_mission/start', 'api_req_mission/result', 'api_req_kousyou/destroyship', 'api_req_kousyou/remodel_slot',
       'api_req_kousyou/destroyitem2', 'api_req_member/itemuse_cond'].includes(o.api);
-  if (resetRecovery) { g.portReady = false; g.akashiAt = {}; }
-  if (!at && !o.api.startsWith('api_start2')) { g.portReady = false; g.akashiAt = {}; }
+  if (resetRecovery) { g.portReady = false; g.akashiAt = {}; g.portSupplyAt = {}; }
+  if (!at && !o.api.startsWith('api_start2')) { g.portReady = false; g.akashiAt = {}; g.portSupplyAt = {}; }
   for (const key of ['shipMasters', 'missionMasters', 'gearMasters', 'gears']) if (Array.isArray(rows[key])) {
     if (key === 'gears' && ['api_get_member/slot_item', 'api_get_member/require_info', 'api_req_member/require_info'].includes(o.api)) g[key] = {};
     for (const row of rows[key]) if (positive(row.api_id)) g[key][row.api_id] = row;
@@ -49,8 +49,15 @@ export function applyGameObservation(g, o) {
   if (port && at && Array.isArray(rows.ships) && Array.isArray(rows.fleets) && Array.isArray(rows.repair)) {
     g.portReady = true;
     for (const f of rows.fleets) {
-      const hpChanged = f.api_ship?.some(id => previousShips[id]?.api_nowhp !== g.ships[id]?.api_nowhp);
+      const hpChanged = f.api_ship?.some(id => previousShips[id] && previousShips[id]?.api_nowhp !== g.ships[id]?.api_nowhp);
       if (!g.akashiAt[f.api_id] || hpChanged) g.akashiAt[f.api_id] = at;
+      const ps = portSupplyStatus(g, f);
+      if (ps.valid) {
+        const condChanged = f.api_ship?.some(id => previousShips[id] && previousShips[id]?.api_cond !== g.ships[id]?.api_cond);
+        if (!g.portSupplyAt[f.api_id] || condChanged) g.portSupplyAt[f.api_id] = at;
+      } else {
+        delete g.portSupplyAt[f.api_id];
+      }
     }
   }
   const d = o.response.api_data, id = num(o, 'api_deck_id');
@@ -80,6 +87,60 @@ export function applyGameObservation(g, o) {
   return rows;
 }
 export const FATIGUE_CYCLE = 180000;
+const SUPPLY_SHIP_IDS = [996, 1002];
+
+export function portSupplyStatus(game, fleet) {
+  const ids = fleet?.api_ship?.filter(id => id > 0) || [];
+  if (!ids.length) {
+    return {
+      placed: false, supplied: false, undamaged: false, condOk: false, notAway: false,
+      valid: false, boost: 0, shipId: null, isKai: false, reason: '所属艦なし'
+    };
+  }
+  let supplyShip = null, supplyMaster = null;
+  for (let i = 0; i < Math.min(2, ids.length); i++) {
+    const s = game.ships[ids[i]];
+    const m = game.shipMasters[s?.api_ship_id];
+    if (SUPPLY_SHIP_IDS.includes(s?.api_ship_id)) {
+      supplyShip = s;
+      supplyMaster = m;
+      break;
+    }
+  }
+  if (!supplyShip) {
+    return {
+      placed: false, supplied: false, undamaged: false, condOk: false, notAway: false,
+      valid: false, boost: 0, shipId: null, isKai: false, reason: '給糧艦未配置'
+    };
+  }
+  const placed = true;
+  const maxFuel = supplyMaster?.api_fuel_max ?? 35;
+  const maxBull = supplyMaster?.api_bull_max ?? 15;
+  const supplied = Number.isFinite(supplyShip.api_fuel) && Number.isFinite(supplyShip.api_bull)
+    ? (supplyShip.api_fuel >= maxFuel && supplyShip.api_bull >= maxBull)
+    : false;
+  const undamaged = (supplyShip.api_nowhp * 4 > supplyShip.api_maxhp * 3);
+  const condOk = (supplyShip.api_cond >= 30);
+  const docked = Object.values(game.repair || {}).some(d => d.api_state > 0 && d.api_ship_id === supplyShip.api_id);
+  const away = Boolean(game.away?.[fleet.api_id] || fleet.api_mission?.[0] !== 0);
+  const notAway = !docked && !away;
+
+  const valid = placed && supplied && undamaged && condOk && notAway;
+  const isKai = supplyShip.api_ship_id === 1002;
+  const boost = isKai ? 3 : 2;
+  let reason = '給糧艦稼働中';
+  if (!placed) reason = '給糧艦未配置';
+  else if (!undamaged) reason = '給糧艦が小破以上（要修復）';
+  else if (!supplied) reason = '給糧艦の補給不足（燃料・弾薬）';
+  else if (!condOk) reason = '給糧艦の疲労（cond30未満）';
+  else if (!notAway) reason = '給糧艦が入渠または遠征中';
+
+  return {
+    placed, supplied, undamaged, condOk, notAway,
+    valid, boost, shipId: supplyShip.api_id, isKai, reason
+  };
+}
+
 export function fatigueFor(game, fleet, target) {
   const pending = { state: 'pending', endAt: null, detail: { reason: '母港の情報待ち', target } };
   if (target === null) return { ...pending, detail: { reason: '目標未設定', target } };
@@ -89,10 +150,59 @@ export function fatigueFor(game, fleet, target) {
   if (!game.portReady || game.away[fleet.api_id] || fleet.api_mission?.[0] !== 0) return pending;
   const ships = ids.map(id => game.ships[id]);
   if (ships.some(s => !s || !Number.isInteger(s.api_cond) || s.api_cond < 0 || s.api_cond > 100 || !s.condAt || Object.values(game.repair).some(d => d.api_state > 0 && d.api_ship_id === s.api_id))) return pending;
+
   const minCond = Math.min(...ships.map(s => s.api_cond));
-  if (minCond >= target) return { state: 'complete', endAt: null, detail: { minCond, target } };
-  const endAt = Math.max(...ships.map(s => s.condAt + Math.ceil(Math.max(0, target - s.api_cond) / 3) * FATIGUE_CYCLE));
-  return { state: 'active', endAt, detail: { minCond, target, cycleMs: FATIGUE_CYCLE } };
+  const portSupply = portSupplyStatus(game, fleet);
+  if (minCond >= target) return { state: 'complete', endAt: null, detail: { minCond, target, portSupply } };
+
+  const baseAt = Math.max(...ships.map(s => s.condAt));
+  const startAt = (portSupply.valid && game.portSupplyAt?.[fleet.api_id]) ? game.portSupplyAt[fleet.api_id] : baseAt;
+  const simShips = ships.map(s => ({
+    id: s.api_id,
+    isSupplyShip: s.api_id === portSupply.shipId,
+    cond: s.api_cond,
+    shipTarget: !portSupply.valid ? Math.min(target, 49) : (s.api_id === portSupply.shipId ? Math.min(target, 49) : target)
+  }));
+
+  if (simShips.every(s => s.cond >= s.shipTarget)) {
+    return { state: 'complete', endAt: null, detail: { startAt, minCond, target, portSupply, stoppedAt49: !portSupply.valid && target > 49 } };
+  }
+
+  let elapsedMinutes = 0;
+  let reached = false;
+  const STEP_MIN = 3;
+  const MAX_MINUTES = 360;
+
+  while (elapsedMinutes < MAX_MINUTES) {
+    elapsedMinutes += STEP_MIN;
+    for (const s of simShips) {
+      if (s.cond < 49) s.cond = Math.min(49, s.cond + 3);
+    }
+    if (portSupply.valid && (elapsedMinutes % 15 === 0)) {
+      for (const s of simShips) {
+        if (!s.isSupplyShip && s.cond < 54) s.cond = Math.min(54, s.cond + portSupply.boost);
+      }
+    }
+    if (simShips.every(s => s.cond >= s.shipTarget)) {
+      reached = true;
+      break;
+    }
+  }
+
+  const endAt = reached ? startAt + elapsedMinutes * 60 * 1000 : null;
+  return {
+    state: reached ? 'active' : 'pending',
+    endAt,
+    detail: {
+      startAt,
+      minCond,
+      target,
+      cycleMs: FATIGUE_CYCLE,
+      portSupply,
+      simMinutes: elapsedMinutes,
+      stoppedAt49: !portSupply.valid && target > 49
+    }
+  };
 }
 
 export const MIN_REPAIR = 1200000;

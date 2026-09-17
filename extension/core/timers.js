@@ -64,12 +64,15 @@ export function calculate(s, o, now = o.responseDate || o.observedAt) {
 export function recompute(s, now, settingsOnly = false) {
   for (let slot = 1; slot <= 4; slot++) {
     if (!s.game.fleets[slot] && !settingsOnly) continue;
+    const f = fatigueFor(s.game, s.game.fleets[slot], targetFor(s.settings, slot));
     updateTimer(s, { id: `fatigue:${slot}`, kind: 'fatigue', slot, name: '疲労回復', subjectId: targetFor(s.settings, slot),
-      ...fatigueFor(s.game, s.game.fleets[slot], targetFor(s.settings, slot)) }, now, false, settingsOnly);
-    if (slot <= 2) updateTimer(s, { id: `akashi:${slot}`, kind: 'akashi', slot, name: '泊地修理', subjectId: null,
-      ...akashiFor(s.game, s.game.fleets[slot], now) }, now);
+      startAt: f.detail?.startAt ?? null, ...f }, now, false, settingsOnly);
+    if (slot <= 2) {
+      const a = akashiFor(s.game, s.game.fleets[slot], now);
+      updateTimer(s, { id: `akashi:${slot}`, kind: 'akashi', slot, name: '泊地修理', subjectId: null,
+        startAt: a.detail?.startAt ?? null, ...a }, now);
+    }
   }
-
 }
 
 async function fingerprint(value) {
@@ -82,16 +85,20 @@ export async function timerUpdates(s, reason = 'observation', onlyFatigue = fals
     if (onlyFatigue && t.kind !== 'fatigue') continue;
     const previous = s.registry[t.id];
     // 回復時刻は再読取で基準が変わり得るため、活動識別には使わない。
-    const identity = await fingerprint([t.kind, t.slot, ['fatigue', 'akashi'].includes(t.kind) ? null : t.subjectId]);
     const active = t.state === 'active';
-    const changedSubject = previous?.identity && previous.identity !== identity && t.subjectId != null && !['fatigue', 'akashi'].includes(t.kind);
-    const fresh = !previous || reason === 'observation' && (s.newActivities.has(t.id) || active && (previous.closed || previous.restart || changedSubject));
-    const entry = fresh ? { activityId: crypto.randomUUID(), closed: false, restart: false } : previous;
-    if (active) { entry.identity = identity; entry.closed = false; entry.restart = false; }
-    if (reason === 'observation' && ['complete', 'empty', 'cancelled'].includes(t.state)) entry.closed = true;
-    s.registry[t.id] = entry;
+    const identity = await fingerprint([t.kind, t.slot, ['fatigue', 'akashi'].includes(t.kind) ? null : t.subjectId]);
     const phases = t.kind === 'akashi' ? [['start', t.detail?.firstAt], ['full', t.endAt]] : [['complete', t.endAt]];
+    const startAt = (active && Number.isSafeInteger(t.startAt ?? t.detail?.startAt)) ? (t.startAt ?? t.detail?.startAt) : null;
+    const changedEnd = active && previous?.endAt != null && previous.endAt !== t.endAt;
+    const changedStart = active && ['akashi', 'fatigue'].includes(t.kind) && previous?.startAt != null && previous.startAt !== startAt;
+    const changedSubject = previous?.identity && previous.identity !== identity && t.subjectId != null && !['fatigue', 'akashi'].includes(t.kind);
+    const fresh = !previous || reason === 'observation' && (s.newActivities.has(t.id) || active && (previous.closed || previous.restart || changedSubject || changedEnd || changedStart));
+    const entry = fresh ? { activityId: crypto.randomUUID(), closed: false, restart: false } : previous;
+    if (active) { entry.identity = identity; entry.closed = false; entry.restart = false; entry.endAt = t.endAt; entry.startAt = startAt; }
+    if (reason === 'observation' && ['complete', 'empty', 'cancelled'].includes(t.state)) { entry.closed = true; entry.endAt = null; }
+    s.registry[t.id] = entry;
     updates.push({ id: t.id, kind: t.kind, slot: t.slot, name: t.name || '', state: t.state,
+      startAt,
       endAt: active ? t.endAt : null,
       events: phases.map(([phase, endAt]) => ({ id: entry.activityId + '-' + phase, phase, endAt: active && Number.isSafeInteger(endAt) ? endAt : null })) });
   }

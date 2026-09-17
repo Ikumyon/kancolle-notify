@@ -75,6 +75,39 @@ class DaemonController(QObject):
     def is_installed(self) -> bool:
         return self.exe_path.exists()
 
+    def get_local_daemon_status(self) -> dict:
+        """外部通信なしでローカルのPIDファイルからデーモンの稼働状態を判定"""
+        pid = None
+        if self.pid_file.exists():
+            try:
+                with open(self.pid_file, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        pid = int(content)
+            except Exception:
+                pid = None
+
+        is_running = False
+        if pid:
+            try:
+                if sys.platform == "win32":
+                    import ctypes
+                    kernel32 = ctypes.windll.kernel32
+                    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                    h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                    if h_proc:
+                        exit_code = ctypes.c_ulong()
+                        kernel32.GetExitCodeProcess(h_proc, ctypes.byref(exit_code))
+                        kernel32.CloseHandle(h_proc)
+                        is_running = (exit_code.value == 259)  # STILL_ACTIVE
+                else:
+                    os.kill(pid, 0)
+                    is_running = True
+            except Exception:
+                is_running = False
+
+        return {"is_running": is_running, "pid": pid if is_running else None}
+
     def run_command(self, command, callback):
         """Qt のイベントループを止めずに CLI を実行。同じ操作は重複させない。"""
         args = list(command) if isinstance(command, (list, tuple)) else [command]

@@ -1,11 +1,11 @@
 // 純粋な通信契約。抽出のみを行い、ゲーム状態やタイマーを計算しない。
-const ship = { api_id: 0, api_ship_id: 0, api_nowhp: 0, api_maxhp: 0, api_cond: 0, api_ndock_time: 0, api_slot: [0], api_slot_ex: 0 };
+const ship = { api_id: 0, api_ship_id: 0, api_nowhp: 0, api_maxhp: 0, api_cond: 0, api_ndock_time: 0, api_slot: [0], api_slot_ex: 0, api_fuel: 0, api_bull: 0 };
 const fleet = { api_id: 0, api_name: '', api_ship: [0], api_mission: [0] };
 const dock = { api_id: 0, api_state: 0, api_ship_id: 0, api_created_ship_id: 0, api_complete_time: 0 };
 const gear = { api_id: 0, api_slotitem_id: 0 };
 const data = { api_ship: [ship], api_ship_data: [ship], api_deck_port: [fleet], api_deck_data: [fleet],
   api_ndock: [dock], api_kdock: [dock], api_slot_item: [gear], api_complatetime: 0, api_mission: [0],
-  api_mst_ship: [{ api_id: 0, api_name: '', api_stype: 0, api_ctype: 0 }],
+  api_mst_ship: [{ api_id: 0, api_name: '', api_stype: 0, api_ctype: 0, api_fuel_max: 0, api_bull_max: 0 }],
   api_mst_mission: [{ api_id: 0, api_name: '' }], api_mst_slotitem: [{ api_id: 0, api_type: [0] }] };
 const arrays = { 'api_get_member/deck': fleet, 'api_get_member/ship2': ship, 'api_get_member/ndock': dock,
   'api_get_member/kdock': dock, 'api_get_member/slot_item': gear };

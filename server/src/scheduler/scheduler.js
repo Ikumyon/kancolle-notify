@@ -2,6 +2,7 @@ import { Repository } from '../repository/repository.js';
 import { nextDeliveryAt } from '../domain/timer.js';
 import { route } from '../api/router.js';
 import { dispatch } from '../notify/dispatcher.js';
+import { snapshot } from '../api/handlers/status.js';
 export class NotificationScheduler {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -41,6 +42,13 @@ export class NotificationScheduler {
     request.signal.addEventListener('abort', () => {
       this.clients.delete(client);
       try { writer.close(); } catch {}
+    });
+    this.run(async () => {
+      try {
+        const snap = await snapshot(new Repository(this.env.DB));
+        const data = { type: 'sync', timers: snap.timers, now: snap.now, offsetSec: snap.settings?.offsetSec ?? 0 };
+        writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)).catch(() => {});
+      } catch {}
     });
     return new Response(readable, {
       headers: {
@@ -91,6 +99,12 @@ export class NotificationScheduler {
       await this.ctx.storage.setAlarm(Date.now() + 60000);
       const response = await route(request, this.env);
       await this.schedule();
+      if (['POST', 'PATCH', 'DELETE'].includes(request.method) && this.clients.size > 0 && response.ok) {
+        try {
+          const snap = await snapshot(new Repository(this.env.DB));
+          this.broadcast({ type: 'update', timers: snap.timers, now: snap.now, offsetSec: snap.settings?.offsetSec ?? 0 });
+        } catch {}
+      }
       return response;
     });
   }

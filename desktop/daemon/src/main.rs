@@ -89,16 +89,36 @@ fn run_loop() {
 }
 
 fn cmd_status() {
-    let mut state = load_state();
+    let cfg = load_config();
     let current_pid = read_pid().unwrap_or_else(|e| {
         eprintln!("[ERROR] {}", e);
         std::process::exit(1);
     });
-    state.is_running = current_pid.is_some();
-    state.pid = current_pid;
+    let is_running = current_pid.is_some();
 
-    let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
-    println!("{}", json);
+    // コマンド実行時にクラウドへ通知・タイマー一覧を問い合わせる
+    match client::fetch_status(&cfg) {
+        Ok(status_res) => {
+            let out = serde_json::json!({
+                "updated_at": status_res.now,
+                "is_running": is_running,
+                "pid": current_pid,
+                "offset_sec": status_res.settings.offset_sec,
+                "timers": status_res.timers,
+                "notified_keys": [],
+                "last_error": null
+            });
+            println!("{}", serde_json::to_string_pretty(&out).unwrap_or_else(|_| "{}".to_string()));
+        }
+        Err(e) => {
+            let mut state = load_state();
+            state.is_running = is_running;
+            state.pid = current_pid;
+            state.last_error = Some(e);
+            let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
+            println!("{}", json);
+        }
+    }
 }
 
 fn cmd_offset(args: &[String]) {

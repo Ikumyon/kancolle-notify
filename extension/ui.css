@@ -36,7 +36,20 @@ button:focus-visible, a:focus-visible { outline: 3px solid #b67b12; outline-offs
 
 .fleet-section { margin-bottom: 6px; }
 .fleet-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 4px 0 2px; }
-.fleet-card { background: #f7fafc; border: 1px solid #d6e0e9; border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; }
+.fleet-card { background: #f7fafc; border: 1px solid #d6e0e9; border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; min-height: 120px; }
+.fleet-normal-view, .fleet-port-supply-view { display: flex; flex-direction: column; gap: 4px; width: 100%; height: 100%; }
+.fleet-port-supply-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #24667c; padding-bottom: 2px; }
+.fleet-port-supply-header .fleet-title { border-bottom: none; padding-bottom: 0; font-size: 12px; }
+.port-supply-close-btn { background: transparent; border: none; padding: 2px 5px; cursor: pointer; color: #64748b; font-size: 13px; border-radius: 4px; line-height: 1; }
+.port-supply-close-btn:hover { background: #e2e8f0; color: #1e293b; }
+.port-supply-checklist { list-style: none; margin: 3px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; }
+.port-supply-check-item { display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.port-supply-check-item.ok { color: #15803d; }
+.port-supply-check-item.ng { color: #b91c1c; font-weight: 600; }
+.port-supply-warn-btn { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 4px; font-size: 10px; padding: 1px 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; margin-top: 2px; width: 100%; justify-content: center; font-weight: 600; }
+.port-supply-warn-btn:hover { background: #fee2e2; }
+.port-supply-ok-btn { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; border-radius: 4px; font-size: 10px; padding: 1px 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; margin-top: 2px; width: 100%; justify-content: center; }
+.port-supply-ok-btn:hover { background: #dcfce7; }
 .fleet-title { font-size: 13px; font-weight: 700; color: #20334a; text-align: center; margin: 0; padding-bottom: 3px; border-bottom: 2px solid #24667c; }
 .fleet-field { display: flex; flex-direction: column; gap: 1px; }
 .fleet-cond-field { flex-direction: row; justify-content: space-between; align-items: center; }
@@ -128,3 +141,72 @@ body.popup { width: 780px; max-width: 100%; }
 .popup .akashi-card p { margin: 2px 0; font-size: 11px; }
 .popup .popup-bottom-grid > * { min-width: 0; }
 .popup #settings-notice { white-space: pre-wrap; }
+
+/* 送信更新の履歴リスト（縦並びログ形式） */
+.operations-log { display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box; }
+.log-item { width: 100%; box-sizing: border-box; }
+.log-summary { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; user-select: none; background: #ffffff; border: 1px solid #d6e0e9; border-radius: 5px; font-size: 12px; transition: background-color 0.15s; }
+.log-summary:hover { background: #f1f5f9; }
+.log-item[open] > .log-summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; background: #f8fafc; border-bottom-color: #cbd5e1; }
+.log-summary::-webkit-details-marker { display: none; }
+.log-summary { list-style: none; }
+.log-badge { display: inline-block; width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.log-badge.badge-sent { background-color: #4ade80; }
+.log-badge.badge-sending { background-color: #38bdf8; }
+.log-badge.badge-retry { background-color: #f59e0b; }
+.log-badge.badge-failed { background-color: #ef4444; }
+.log-badge.badge-queued { background-color: #94a3b8; }
+.log-time { font-family: Consolas, monospace; font-size: 11.5px; color: #64748b; flex-shrink: 0; }
+.log-status { font-weight: 700; font-size: 11.5px; flex-shrink: 0; }
+.log-status.badge-sent { color: #166534; }
+.log-status.badge-sending { color: #0369a1; }
+.log-status.badge-retry { color: #b45309; }
+.log-status.badge-failed { color: #b91c1c; }
+.log-status.badge-queued { color: #475569; }
+.log-status.badge-unconfigured { color: #b45309; }
+.log-badge.badge-unconfigured { background-color: #f59e0b; }
+.log-desc { color: #1e293b; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.log-content { padding: 10px; background: #f8fafc; border: 1px solid #d6e0e9; border-top: none; border-radius: 0 0 6px 6px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-bottom: 4px; box-sizing: border-box; }
+
+/* 中央サーバー未設定警告 */
+.connection-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background-color: #fffbeb;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 10px 0 16px;
+  font-size: 13px;
+  color: #92400e;
+}
+.connection-alert .alert-icon { font-size: 18px; flex-shrink: 0; }
+.connection-alert a { color: #b45309; font-weight: 700; text-decoration: underline; }
+.alert-unconfigured {
+  color: #b45309 !important;
+  font-weight: 600;
+  background-color: #fffbeb;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #fde68a;
+  display: inline-block;
+  margin: 4px 0;
+}
+
+/* フォームボタン横のフィードバックメッセージ */
+.form-notice {
+  display: inline-block;
+  margin-left: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.form-notice.success {
+  color: #15803d;
+}
+.form-notice.error {
+  color: #dc2626;
+}
+
+

@@ -9,6 +9,7 @@ pub fn fetch_status(config: &Config) -> Result<StatusResponse, String> {
     let url = format!("{}/api/status", config.server_url.trim_end_matches('/'));
     
     let mut req = ureq::get(&url);
+    req = req.header("User-Agent", "kancolle-daemon/0.9.1");
     if !config.token.is_empty() {
         req = req.header("Authorization", &format!("Bearer {}", config.token));
     }

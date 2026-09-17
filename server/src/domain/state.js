@@ -2,8 +2,10 @@ import { targetDeliveryTime } from './timer.js';
 import { validId, issueSession } from './generation.js';
 export { validId } from './generation.js';
 export const kinds = ['expedition', 'repair', 'build', 'akashi', 'fatigue'];
+export const defaultCalculationSettings = () => ({ fatigueTarget: 49, fatiguePresets: [40, 49], fatigueTargets: {} });
 export const defaultSettings = () => ({ offsetSec: 0, providers: { discord: false, telegram: false },
-  categories: Object.fromEntries(kinds.map(k => [k, true])), hideBuildName: true });
+  categories: Object.fromEntries(kinds.map(k => [k, true])), hideBuildName: true,
+  calculation: defaultCalculationSettings() });
 export const emptyState = () => ({ schema: 2, settings: defaultSettings(), session: null, sessions: {}, timers: {}, deliveries: {}, history: [] });
 export function record(s, now, type, detail = {}) { s.history.push({ at: now, type, ...detail }); }
 export function beginSession(s, requestId, device, now) {
@@ -35,7 +37,7 @@ export function reconcile(s, now) {
         if (d.status === 'pending') { d.dueAt = dueAt; d.item = structuredClone(timer); }
       };
       if (corrected && timer.suppressedRevision !== timer.revision && !sent.some(d => d.revision === timer.revision)) make('correction', now);
-      if (timer.state === 'active' && Number.isSafeInteger(event.endAt) && !sent.some(d => d.type === 'notification')) {
+      if (timer.state === 'active' && Number.isSafeInteger(event.endAt) && !sent.some(d => d.type === 'notification' && d.eventEndAt === event.endAt)) {
         make('notification', event.endAt + (timer.kind === 'manual' ? 0 : s.settings.offsetSec * 1000));
       }
     }
@@ -51,11 +53,23 @@ export function updateTimer(s, input, now, reason = 'observation') {
 }
 export function applySettings(s, patch, now) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch) ||
-    Object.keys(patch).some(k => !['offsetSec', 'providers', 'categories', 'hideBuildName'].includes(k))) throw new Error('invalid_settings');
+    Object.keys(patch).some(k => !['offsetSec', 'providers', 'categories', 'hideBuildName', 'calculation'].includes(k))) throw new Error('invalid_settings');
   const next = structuredClone(s.settings);
   for (const [key, value] of Object.entries(patch)) {
     if (key === 'offsetSec') { if (!Number.isInteger(value) || Math.abs(value) > 3600) throw new Error('invalid_settings'); }
     else if (key === 'hideBuildName') { if (typeof value !== 'boolean') throw new Error('invalid_settings'); }
+    else if (key === 'calculation') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_settings');
+      const target = v => Number.isInteger(v) && v >= 0 && v <= 54;
+      if (value.fatigueTarget !== undefined && !target(value.fatigueTarget)) throw new Error('invalid_settings');
+      if (value.fatiguePresets !== undefined && (!Array.isArray(value.fatiguePresets) || value.fatiguePresets.length < 1 || value.fatiguePresets.length > 12 || !value.fatiguePresets.every(target))) throw new Error('invalid_settings');
+      if (value.fatigueTargets !== undefined) {
+        if (!value.fatigueTargets || typeof value.fatigueTargets !== 'object' || Array.isArray(value.fatigueTargets) || Object.entries(value.fatigueTargets).some(([id, v]) => !['1', '2', '3', '4'].includes(id) || v !== null && !target(v))) throw new Error('invalid_settings');
+      }
+      next.calculation = { ...next.calculation, ...value };
+      if (value.fatigueTargets) next.calculation.fatigueTargets = { ...next.calculation.fatigueTargets, ...value.fatigueTargets };
+      continue;
+    }
     else {
       if (!value || Array.isArray(value) || typeof value !== 'object' || Object.entries(value).some(([k, v]) => !Object.hasOwn(next[key], k) || typeof v !== 'boolean')) throw new Error('invalid_settings');
       Object.assign(next[key], value); continue;

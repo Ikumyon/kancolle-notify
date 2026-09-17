@@ -5,11 +5,11 @@
 <main><section><h2>接続情報</h2><form id="connection-form">
 <label>中央サーバーURL<input id="url" type="url" required placeholder="https://example.workers.dev"></label>
 <label>デバイストークン<input id="token" type="password" required autocomplete="off" minlength="32"></label>
-<button>接続情報を保存</button></form></section>
-<section><h2>拡張の回復計算設定</h2><form id="calculation-form"><label>疲労の目標cond<input id="fatigue-target" type="number" min="0" max="49" step="1" required></label>
-<label>ポップアップの目標cond選択肢（カンマ区切り）<input id="fatigue-presets" placeholder="40,49" required></label>
-<p class="muted">0〜49の整数を12件まで登録できます。艦隊ごとの目標はポップアップで選択します。</p>
-<button>拡張へ保存</button></form></section>
+<button>接続情報を保存</button> <span id="connection-notice" class="form-notice" role="status"></span></form></section>
+<section><h2>拡張の回復計算設定</h2><form id="calculation-form"><label>疲労の目標cond<input id="fatigue-target" type="number" min="0" max="54" step="1" required></label>
+<label>ポップアップの目標cond選択肢（カンマ区切り）<input id="fatigue-presets" placeholder="40,49,50,53" required></label>
+<p class="muted">0〜54の整数を12件まで登録できます。艦隊ごとの目標はポップアップで選択します。</p>
+<button>拡張へ保存</button> <span id="calculation-notice" class="form-notice" role="status"></span></form></section>
 <section><h2>通知設定</h2><button id="reload-settings" type="button">中央から再取得</button>
 <form id="settings-form"><fieldset id="settings-fields" disabled>
 <label>通知オフセット（秒）<input id="offset" type="number" min="-3600" max="3600" step="1" required></label>
@@ -19,11 +19,11 @@
 <fieldset><legend>通知カテゴリ</legend><label><input type="checkbox" data-category="expedition">遠征</label>
 <label><input type="checkbox" data-category="repair">入渠</label><label><input type="checkbox" data-category="build">建造</label>
 <label><input type="checkbox" data-category="akashi">泊地修理</label><label><input type="checkbox" data-category="fatigue">疲労</label></fieldset>
-<button>中央へ保存</button></fieldset></form></section>
+<button>中央へ保存</button> <span id="settings-notice" class="form-notice" role="status"></span></fieldset></form></section>
 <section><h2>手動予約</h2><form id="manual-form"><label>予約名<input id="manual-name" maxlength="80" required></label>
 <label>指定方法<select id="manual-mode"><option value="minutes">指定分数後</option><option value="absolute">日時指定（日本時間）</option></select></label>
 <label id="minutes-label">何分後<input id="minutes" type="number" min="1" max="525600" step="1" value="10" required></label>
 <label id="absolute-label" hidden>日時<input id="absolute" type="datetime-local" step="1"></label>
-<button>予約する</button></form>
+<button>予約する</button> <span id="manual-notice" class="form-notice" role="status"></span></form>
 <button id="reload-manual" type="button">予約一覧を更新</button><div id="manual-list"></div></section></main>
 <script type="module" src="settings.js"></script></body></html>

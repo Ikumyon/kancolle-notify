@@ -2,7 +2,7 @@ export const defaultCalculationSettings = () => ({ fatigueTarget: 49, fatiguePre
 export function calculationSettings(current, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !Object.hasOwn(current, k))) throw new Error('invalid_calculation_settings');
   const next = structuredClone(current);
-  const target = v => Number.isInteger(v) && v >= 0 && v <= 49;
+  const target = v => Number.isInteger(v) && v >= 0 && v <= 54;
   for (const [key, value] of Object.entries(patch)) {
     if (key === 'fatigueTarget') { if (!target(value)) throw new Error('invalid_fatigue_target'); }
     if (key === 'fatiguePresets' && (!Array.isArray(value) || value.length < 1 || value.length > 12 || new Set(value).size !== value.length || !value.every(target))) throw new Error('invalid_fatigue_presets');

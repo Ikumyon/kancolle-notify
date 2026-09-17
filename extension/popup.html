@@ -21,24 +21,52 @@
 <section class="fleet-section">
   <h2><i class="fa-solid fa-ship"></i> 艦隊状況</h2>
   <div id="fleet-grid" class="fleet-grid">
-    <article class="fleet-card" id="fleet-card-1"><h3 class="fleet-title">第1艦隊</h3>
-      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-1" class="cond-badge cond-none">—</span></div>
-      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-1" class="segments" role="group" aria-label="第1艦隊の目標疲労度"></div><p id="fleet-fatigue-time-1" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-1" class="fleet-status-text muted" hidden></p></div>
+    <article class="fleet-card" id="fleet-card-1">
+      <div class="fleet-normal-view" id="fleet-normal-1">
+        <h3 class="fleet-title">第1艦隊</h3>
+        <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-1" class="cond-badge cond-none">—</span></div>
+        <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-1" class="segments" role="group" aria-label="第1艦隊の目標疲労度"></div><p id="fleet-fatigue-time-1" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-1" class="fleet-status-text muted" hidden></p></div>
+      </div>
+      <div class="fleet-port-supply-view" id="fleet-port-supply-1" hidden>
+        <div class="fleet-port-supply-header"><h3 class="fleet-title">第1 母港給糧確認</h3><button type="button" class="port-supply-close-btn" data-close-port-supply="1" aria-label="閉じる"><i class="fa-solid fa-xmark"></i></button></div>
+        <ul class="port-supply-checklist" id="port-supply-checklist-1"></ul>
+      </div>
     </article>
-    <article class="fleet-card" id="fleet-card-2"><h3 class="fleet-title">第2艦隊</h3>
-      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-2" class="cond-badge cond-none">—</span></div>
-      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-2" class="segments" role="group" aria-label="第2艦隊の目標疲労度"></div><p id="fleet-fatigue-time-2" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-2" class="fleet-status-text muted" hidden></p></div>
-      <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-2" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-2" class="deadline expedition-none">--:--</p></div></div>
+    <article class="fleet-card" id="fleet-card-2">
+      <div class="fleet-normal-view" id="fleet-normal-2">
+        <h3 class="fleet-title">第2艦隊</h3>
+        <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-2" class="cond-badge cond-none">—</span></div>
+        <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-2" class="segments" role="group" aria-label="第2艦隊の目標疲労度"></div><p id="fleet-fatigue-time-2" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-2" class="fleet-status-text muted" hidden></p></div>
+        <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-2" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-2" class="deadline expedition-none">--:--</p></div></div>
+      </div>
+      <div class="fleet-port-supply-view" id="fleet-port-supply-2" hidden>
+        <div class="fleet-port-supply-header"><h3 class="fleet-title">第2 母港給糧確認</h3><button type="button" class="port-supply-close-btn" data-close-port-supply="2" aria-label="閉じる"><i class="fa-solid fa-xmark"></i></button></div>
+        <ul class="port-supply-checklist" id="port-supply-checklist-2"></ul>
+      </div>
     </article>
-    <article class="fleet-card" id="fleet-card-3"><h3 class="fleet-title">第3艦隊</h3>
-      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-3" class="cond-badge cond-none">—</span></div>
-      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-3" class="segments" role="group" aria-label="第3艦隊の目標疲労度"></div><p id="fleet-fatigue-time-3" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-3" class="fleet-status-text muted" hidden></p></div>
-      <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-3" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-3" class="deadline expedition-none">--:--</p></div></div>
+    <article class="fleet-card" id="fleet-card-3">
+      <div class="fleet-normal-view" id="fleet-normal-3">
+        <h3 class="fleet-title">第3艦隊</h3>
+        <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-3" class="cond-badge cond-none">—</span></div>
+        <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-3" class="segments" role="group" aria-label="第3艦隊の目標疲労度"></div><p id="fleet-fatigue-time-3" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-3" class="fleet-status-text muted" hidden></p></div>
+        <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-3" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-3" class="deadline expedition-none">--:--</p></div></div>
+      </div>
+      <div class="fleet-port-supply-view" id="fleet-port-supply-3" hidden>
+        <div class="fleet-port-supply-header"><h3 class="fleet-title">第3 母港給糧確認</h3><button type="button" class="port-supply-close-btn" data-close-port-supply="3" aria-label="閉じる"><i class="fa-solid fa-xmark"></i></button></div>
+        <ul class="port-supply-checklist" id="port-supply-checklist-3"></ul>
+      </div>
     </article>
-    <article class="fleet-card" id="fleet-card-4"><h3 class="fleet-title">第4艦隊</h3>
-      <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-4" class="cond-badge cond-none">—</span></div>
-      <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-4" class="segments" role="group" aria-label="第4艦隊の目標疲労度"></div><p id="fleet-fatigue-time-4" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-4" class="fleet-status-text muted" hidden></p></div>
-      <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-4" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-4" class="deadline expedition-none">--:--</p></div></div>
+    <article class="fleet-card" id="fleet-card-4">
+      <div class="fleet-normal-view" id="fleet-normal-4">
+        <h3 class="fleet-title">第4艦隊</h3>
+        <div class="fleet-field fleet-cond-field"><span class="fleet-field-label">最低cond</span><span id="fleet-cond-4" class="cond-badge cond-none">—</span></div>
+        <div class="fleet-field"><div class="fleet-field-label">目標値</div><div id="fleet-presets-4" class="segments" role="group" aria-label="第4艦隊の目標疲労度"></div><p id="fleet-fatigue-time-4" class="deadline expedition-none">--:--</p><p id="fleet-fatigue-note-4" class="fleet-status-text muted" hidden></p></div>
+        <div class="fleet-field"><div class="fleet-field-label"><i class="fa-solid fa-compass"></i> 遠征</div><div class="expedition-box"><p id="fleet-exp-name-4" class="expedition-name muted">未出撃</p><p id="fleet-exp-time-4" class="deadline expedition-none">--:--</p></div></div>
+      </div>
+      <div class="fleet-port-supply-view" id="fleet-port-supply-4" hidden>
+        <div class="fleet-port-supply-header"><h3 class="fleet-title">第4 母港給糧確認</h3><button type="button" class="port-supply-close-btn" data-close-port-supply="4" aria-label="閉じる"><i class="fa-solid fa-xmark"></i></button></div>
+        <ul class="port-supply-checklist" id="port-supply-checklist-4"></ul>
+      </div>
     </article>
   </div>
 </section>

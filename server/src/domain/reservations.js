@@ -8,9 +8,10 @@ export function validateUpdate(u) {
     !Array.isArray(u.timers) || !u.timers.length || u.timers.length > 32) throw new Error('invalid_update');
   const ids = new Set(), events = new Set();
   for (const t of u.timers) {
-    if (!exact(t, ['id', 'kind', 'slot', 'name', 'state', 'endAt', 'events']) || !kinds.includes(t.kind) ||
+    if (!exact(t, ['id', 'kind', 'slot', 'name', 'state', 'startAt', 'endAt', 'events']) || !kinds.includes(t.kind) ||
       !Number.isInteger(t.slot) || t.slot < 1 || t.slot > 4 || t.id !== `${t.kind}:${t.slot}` || ids.has(t.id) ||
       typeof t.name !== 'string' || t.name.length > 200 || !['pending', 'empty', 'active', 'complete', 'cancelled'].includes(t.state) ||
+      (t.startAt !== null && !time(t.startAt)) ||
       !Array.isArray(t.events) || !t.events.length || t.events.length > 4 ||
       (t.state === 'active' ? !time(t.endAt) : t.endAt !== null)) throw new Error('invalid_timer');
     ids.add(t.id);
@@ -28,7 +29,6 @@ export function receiveUpdate(s, u, device, now) {
   const receipt = { sequence: u.sequence, receivedAt: now };
   if (s.session?.id !== u.sessionId || s.session.device !== device) return { ...receipt, status: 'stale_session' };
   if (u.sequence <= s.session.sequence) return { ...receipt, status: 'duplicate' };
-  if (u.sequence !== s.session.sequence + 1) return { ...receipt, status: 'sequence_gap' };
   for (const t of u.timers) for (const e of t.events) {
     if (Object.values(s.timers).some(old => old.id !== t.id && old.events.some(v => v.id === e.id))) throw new Error('invalid_event_owner');
   }

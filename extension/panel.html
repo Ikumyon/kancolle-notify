@@ -4,8 +4,12 @@
 <body class="observation-page">
 <header><h1>艦これ 計算結果・送信</h1><p id="notice" role="status">未観測</p><p id="collector-error" role="alert"></p>
 <nav><a href="settings.html" target="_blank">設定・手動予約</a> <button id="retry" type="button">送信を再試行</button></nav></header>
+<div id="connection-alert" class="connection-alert" hidden role="alert">
+  <span class="alert-icon">⚠️</span>
+  <span class="alert-text">中央サーバーが<strong>【未設定】</strong>です。クラウドへの送信を行うには <a href="settings.html" target="_blank">設定画面</a> でURLとデバイストークンを入力・保存してください。</span>
+</div>
 <main><section><h2>艦隊・遠征・回復予定</h2><div id="fleets" class="observations"></div></section>
 <section><h2>入渠</h2><div id="repair" class="observations"></div></section>
 <section><h2>建造</h2><div id="build" class="observations"></div></section>
-<section><h2>送信更新の履歴</h2><div id="operations" class="observations"></div></section></main>
+<section><h2>送信更新の履歴</h2><div id="operations" class="operations-log"></div></section></main>
 <script type="module" src="ui-entry.js"></script></body></html>

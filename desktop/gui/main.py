@@ -2,10 +2,11 @@ import sys
 import json
 import os
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,6 +33,62 @@ if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 from controller import DaemonController
+
+
+class SseClientThread(QThread):
+    """Cloudflare Workers の /api/events (SSE) を受信するバックグラウンドスレッド"""
+    event_received = Signal(dict)
+    connection_status = Signal(bool)
+
+    def __init__(self, controller: DaemonController, parent=None):
+        super().__init__(parent)
+        self.controller = controller
+        self._running = True
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
+        while self._running:
+            cfg = self.controller.load_config()
+            server_url = (cfg.get("server_url") or "").strip().rstrip("/")
+            token = (cfg.get("token") or "").strip()
+
+            if not server_url:
+                time.sleep(2)
+                continue
+
+            url = f"{server_url}/api/events"
+            headers = {
+                "Accept": "text/event-stream",
+                "User-Agent": "kancolle-gui/0.9.1"
+            }
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                # 35秒タイムアウト（Cloudflareのキープアライブ等を考慮）
+                with urllib.request.urlopen(req, timeout=35) as response:
+                    self.connection_status.emit(True)
+                    for line in response:
+                        if not self._running:
+                            break
+                        decoded = line.decode("utf-8", errors="replace").strip()
+                        if decoded.startswith("data:"):
+                            data_str = decoded[5:].strip()
+                            try:
+                                payload = json.loads(data_str)
+                                self.event_received.emit(payload)
+                            except Exception:
+                                pass
+            except Exception:
+                self.connection_status.emit(False)
+                # 再接続待機（0.1秒単位で_runningをチェック）
+                for _ in range(30):
+                    if not self._running:
+                        break
+                    time.sleep(0.1)
 
 
 class SettingsDialog(QDialog):
@@ -182,12 +239,17 @@ class TimetableWindow(QWidget):
         self.timer.timeout.connect(self.on_tick)
         self.timer.start(1000)
 
-        # デーモンステータス確認用タイマー (5秒ごと)
+        # ストリーミング (SSE) 受信スレッド起動: Cloudflareからのプッシュのみを受信
+        self.sse_worker = SseClientThread(self.controller, self)
+        self.sse_worker.event_received.connect(self.on_sse_event)
+        self.sse_worker.start()
+
+        # デーモン常駐状態の確認タイマー (外部HTTP通信なし・ローカルPID確認のみ・5秒ごと)
         self.daemon_poll_timer = QTimer(self)
-        self.daemon_poll_timer.timeout.connect(self.refresh_daemon_status)
+        self.daemon_poll_timer.timeout.connect(self.check_local_daemon_status)
         self.daemon_poll_timer.start(5000)
 
-        self.refresh_daemon_status()
+        self.check_local_daemon_status()
 
     def init_ui(self):
         self.setWindowTitle("艦これ 通知管理 v0.9.1-beta")
@@ -196,9 +258,14 @@ class TimetableWindow(QWidget):
 
         self.setStyleSheet("""
             QWidget {
-                background-color: #0f172a;
                 color: #f8fafc;
                 font-family: 'Segoe UI', Meiryo, sans-serif;
+            }
+            TimetableWindow {
+                background-color: #0f172a;
+            }
+            QLabel {
+                background-color: transparent;
             }
             QFrame#headerPanel {
                 background-color: #1e293b;
@@ -364,6 +431,49 @@ class TimetableWindow(QWidget):
 
         main_layout.addWidget(footer)
 
+    def on_sse_event(self, data: dict):
+        """Cloudflareサーバーから届いたストリーミング（SSE）イベントの処理"""
+        event_type = data.get("type")
+        if event_type in ("sync", "update"):
+            if "offsetSec" in data:
+                self.offset_sec = data["offsetSec"]
+                self.offset_label.setText(
+                    f"通知オフセット: {self.offset_sec:+d}秒" if self.offset_sec != 0 else "通知オフセット: ±0秒"
+                )
+            self.cached_timers = data.get("timers", [])
+            self.rebuild_table()
+
+    def check_local_daemon_status(self):
+        """外部HTTP通信を行わず、ローカルのPIDファイルのみでデーモン常駐状態を更新"""
+        if not self.controller.is_installed():
+            self.status_label.setText(f"▲ 常駐デーモン未検出 ({self.controller.exe_name})")
+            self.status_label.setStyleSheet("background-color: #422006; color: #fbbf24;")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            return
+
+        st = self.controller.get_local_daemon_status()
+        is_running = st.get("is_running", False)
+        pid = st.get("pid")
+
+        if is_running:
+            self.status_label.setText(f"● 常駐中 (PID: {pid})")
+            self.status_label.setStyleSheet("background-color: #064e3b; color: #34d399;")
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+        else:
+            self.status_label.setText("○ 停止中")
+            self.status_label.setStyleSheet("background-color: #451a1a; color: #f87171;")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+
+    def closeEvent(self, event):
+        """GUI終了時にSSE受信スレッドを安全に停止"""
+        if hasattr(self, "sse_worker"):
+            self.sse_worker.stop()
+            self.sse_worker.wait(1000)
+        super().closeEvent(event)
+
     def on_tick(self):
         """毎秒の時計更新 & テーブル内の残り時間カウントダウン更新"""
         now = datetime.now()
@@ -447,7 +557,7 @@ class TimetableWindow(QWidget):
             kind = item.get("kind", "")
             slot_num = item.get("slot") or 0
             name = item.get("name") or "—"
-            end_ms = item.get("end_at")
+            end_ms = item.get("endAt") if item.get("endAt") is not None else item.get("end_at")
 
             self.table.insertRow(row)
 
@@ -472,10 +582,11 @@ class TimetableWindow(QWidget):
             name_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.table.setItem(row, 2, name_item)
 
-            # 4. 完了予定時刻
+            # 4. 完了予定時刻（通知オフセットを反映）
             due_str = "—"
             if end_ms and end_ms > 0:
-                due_dt = datetime.fromtimestamp(end_ms / 1000.0)
+                effective_ms = end_ms + (self.offset_sec * 1000 if kind != "manual" else 0)
+                due_dt = datetime.fromtimestamp(effective_ms / 1000.0)
                 due_str = due_dt.strftime("%H:%M:%S")
             due_item = QTableWidgetItem(due_str)
             due_item.setTextAlignment(Qt.AlignCenter)
@@ -517,7 +628,7 @@ class TimetableWindow(QWidget):
 
             item = sorted_timers[row]
             kind = item.get("kind", "")
-            end_ms = item.get("end_at")
+            end_ms = item.get("endAt") if item.get("endAt") is not None else item.get("end_at")
             state_str = item.get("state", "empty")
             events = item.get("events", [])
 
@@ -533,16 +644,21 @@ class TimetableWindow(QWidget):
                     status_item.setForeground(QColor("#64748b"))
                 continue
 
-            # 直近未到達のイベント（akashiの20分待機など）があれば取得
-            target_ms = end_ms
+            # 直近未到達のイベント（akashiの20分待機など）があれば取得（通知オフセットを反映）
+            offset_ms = self.offset_sec * 1000 if kind != "manual" else 0
+            target_ms = (end_ms + offset_ms) if end_ms else None
             phase_text = None
             if events:
-                upcoming = [e for e in events if e.get("end_at") and e.get("end_at") > now_ms]
+                upcoming = [
+                    e for e in events
+                    if (e.get("endAt") or e.get("end_at")) and ((e.get("endAt") or e.get("end_at")) + offset_ms) > now_ms
+                ]
                 if upcoming:
-                    upcoming.sort(key=lambda e: e.get("end_at"))
+                    upcoming.sort(key=lambda e: (e.get("endAt") or e.get("end_at") or 0) + offset_ms)
                     target_ev = upcoming[0]
+                    target_ev_ms = target_ev.get("endAt") or target_ev.get("end_at")
                     if target_ev.get("phase") == "20min":
-                        target_ms = target_ev.get("end_at")
+                        target_ms = target_ev_ms + offset_ms
                         phase_text = "20分待機"
 
             if not target_ms or target_ms == 0:

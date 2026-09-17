@@ -2,10 +2,18 @@ import { readFatigueTarget, readFatiguePresets } from './fatigue-settings.js';
 import { settingsPatch } from './notification-settings.js';
 const $ = selector => document.querySelector(selector);
 const call = async (type, extra = {}) => {
-  const r = await chrome.runtime.sendMessage({ type, ...extra });
-  if (r?.error) throw new Error(r.error); return r.value;
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('バックグラウンド応答タイムアウト（拡張機能を再読み込みしてください）')), 5000));
+  const send = (async () => {
+    const r = await chrome.runtime.sendMessage({ type, ...extra });
+    if (r?.error) throw new Error(r.error); return r?.value;
+  })();
+  return Promise.race([send, timeout]);
 };
 const notice = text => { $('#notice').textContent = text; };
+const setNotice = (selector, text, isError = false) => {
+  const el = $(selector);
+  if (el) { el.textContent = text; el.className = 'form-notice ' + (isError ? 'error' : 'success'); }
+};
 async function action(fn) { try { await fn(); } catch (e) { notice('操作に失敗しました: ' + e.message); } }
 async function loadSettings() {
   const s = await call('settings');
@@ -29,22 +37,50 @@ async function loadManual() {
   if (!reservations.length) list.textContent = '手動予約はありません';
 }
 $('#connection-form').addEventListener('submit', event => {
-  event.preventDefault(); void action(async () => {
-    await call('configure', { url: $('#url').value, token: $('#token').value });
-    notice('接続情報を保存しました'); await loadSettings(); await loadManual();
-  });
+  event.preventDefault();
+  const btn = $('#connection-form button'); btn.disabled = true;
+  setNotice('#connection-notice', '保存中…');
+  void (async () => {
+    try {
+      await call('configure', { url: $('#url').value.trim(), token: $('#token').value.trim() });
+      setNotice('#connection-notice', '✅ 接続情報を保存しました');
+      notice('接続情報を保存しました');
+      try { await loadSettings(); await loadManual(); } catch {
+        setNotice('#connection-notice', '✅ 接続情報を保存しました（通知設定の取得中…）');
+      }
+    } catch (e) {
+      setNotice('#connection-notice', '❌ 保存失敗: ' + e.message, true);
+      notice('操作に失敗しました: ' + e.message);
+    } finally { btn.disabled = false; }
+  })();
 });
 $('#calculation-form').addEventListener('submit', event => {
-  event.preventDefault(); void action(async () => {
-    await call('calculation-settings', { patch: { fatigueTarget: readFatigueTarget($('#fatigue-target')), fatiguePresets: readFatiguePresets($('#fatigue-presets')) } });
-    notice('拡張へ保存し、回復予定を再計算しました');
-  });
+  event.preventDefault();
+  const btn = $('#calculation-form button'); btn.disabled = true;
+  void (async () => {
+    try {
+      await call('calculation-settings', { patch: { fatigueTarget: readFatigueTarget($('#fatigue-target')), fatiguePresets: readFatiguePresets($('#fatigue-presets')) } });
+      setNotice('#calculation-notice', '✅ 拡張へ保存しました');
+      notice('拡張へ保存し、回復予定を再計算しました');
+    } catch (e) {
+      setNotice('#calculation-notice', '❌ 保存失敗: ' + e.message, true);
+      notice('操作に失敗しました: ' + e.message);
+    } finally { btn.disabled = false; }
+  })();
 });
 $('#settings-form').addEventListener('submit', event => {
-  event.preventDefault(); void action(async () => {
-    await call('settings', { patch: settingsPatch(document) });
-    notice('中央へ保存しました');
-  });
+  event.preventDefault();
+  const btn = $('#settings-form button'); btn.disabled = true;
+  void (async () => {
+    try {
+      await call('settings', { patch: settingsPatch(document) });
+      setNotice('#settings-notice', '✅ 中央へ保存しました');
+      notice('中央へ保存しました');
+    } catch (e) {
+      setNotice('#settings-notice', '❌ 保存失敗: ' + e.message, true);
+      notice('操作に失敗しました: ' + e.message);
+    } finally { btn.disabled = false; }
+  })();
 });
 $('#reload-settings').addEventListener('click', () => action(async () => { await loadSettings(); notice('通知設定を取得しました'); }));
 $('#reload-manual').addEventListener('click', () => action(loadManual));
@@ -56,16 +92,23 @@ $('#manual-mode').addEventListener('change', () => {
 let pending = null, sending = false;
 $('#manual-form').addEventListener('submit', event => {
   event.preventDefault(); if (sending) return;
-  void action(async () => {
+  void (async () => {
     const form = { name: $('#manual-name').value, ...($('#manual-mode').value === 'minutes'
       ? { minutes: Number($('#minutes').value) } : { endAt: Date.parse($('#absolute').value + '+09:00') }) };
     if (!pending || JSON.stringify(pending.form) !== JSON.stringify(form)) pending = { form, requestId: crypto.randomUUID() };
     sending = true;
+    setNotice('#manual-notice', '予約中…');
     try {
       await call('manual-create', { command: { ...pending.form, requestId: pending.requestId } });
-      pending = null; $('#manual-form').reset(); notice('予約しました'); await loadManual();
+      pending = null; $('#manual-form').reset();
+      setNotice('#manual-notice', '✅ 予約しました');
+      notice('予約しました');
+      await loadManual();
+    } catch (e) {
+      setNotice('#manual-notice', '❌ 予約失敗: ' + e.message, true);
+      notice('操作に失敗しました: ' + e.message);
     } finally { sending = false; }
-  });
+  })();
 });
 void action(async () => {
   const local = await call('calculation-settings');

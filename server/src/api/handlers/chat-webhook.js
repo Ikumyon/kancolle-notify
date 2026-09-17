@@ -35,14 +35,10 @@ export async function handleTelegramWebhook(request, env, repo) {
       ...active.map(t => `${labels[t.kind]} ${t.slot || ''} ${t.name}: ${new Date(t.endAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}`),
       ...(!active.length ? ['稼働中のタイマーはありません'] : [])].join('\n');
   }
-  try {
-    const response = await (env.NOTIFICATION_SEND || fetch)(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: escapeHtml(text.slice(0, 3000)), parse_mode: 'HTML' }),
-      signal: AbortSignal.timeout(15000)
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) return json({ error: 'reply_failed' }, 503);
-    return json({ ok: true });
-  } catch { return json({ error: 'reply_failed' }, 503); }
+  return json({
+    method: 'sendMessage',
+    chat_id: env.TELEGRAM_CHAT_ID,
+    text: escapeHtml(text.slice(0, 3000)),
+    parse_mode: 'HTML'
+  });
 }

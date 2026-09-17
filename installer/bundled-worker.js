@@ -44,11 +44,13 @@ function issueSession(s, requestId, device) {
 
 // server/src/domain/state.js
 var kinds = ["expedition", "repair", "build", "akashi", "fatigue"];
+var defaultCalculationSettings = () => ({ fatigueTarget: 49, fatiguePresets: [40, 49], fatigueTargets: {} });
 var defaultSettings = () => ({
   offsetSec: 0,
   providers: { discord: false, telegram: false },
   categories: Object.fromEntries(kinds.map((k) => [k, true])),
-  hideBuildName: true
+  hideBuildName: true,
+  calculation: defaultCalculationSettings()
 });
 var emptyState = () => ({ schema: 2, settings: defaultSettings(), session: null, sessions: {}, timers: {}, deliveries: {}, history: [] });
 function record(s, now, type, detail = {}) {
@@ -102,7 +104,7 @@ function reconcile(s, now) {
         }
       };
       if (corrected && timer.suppressedRevision !== timer.revision && !sent.some((d) => d.revision === timer.revision)) make("correction", now);
-      if (timer.state === "active" && Number.isSafeInteger(event.endAt) && !sent.some((d) => d.type === "notification")) {
+      if (timer.state === "active" && Number.isSafeInteger(event.endAt) && !sent.some((d) => d.type === "notification" && d.eventEndAt === event.endAt)) {
         make("notification", event.endAt + (timer.kind === "manual" ? 0 : s.settings.offsetSec * 1e3));
       }
     }
@@ -122,13 +124,24 @@ function updateTimer(s, input, now, reason = "observation") {
   reconcile(s, now);
 }
 function applySettings(s, patch, now) {
-  if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).some((k) => !["offsetSec", "providers", "categories", "hideBuildName"].includes(k))) throw new Error("invalid_settings");
+  if (!patch || typeof patch !== "object" || Array.isArray(patch) || Object.keys(patch).some((k) => !["offsetSec", "providers", "categories", "hideBuildName", "calculation"].includes(k))) throw new Error("invalid_settings");
   const next = structuredClone(s.settings);
   for (const [key, value] of Object.entries(patch)) {
     if (key === "offsetSec") {
       if (!Number.isInteger(value) || Math.abs(value) > 3600) throw new Error("invalid_settings");
     } else if (key === "hideBuildName") {
       if (typeof value !== "boolean") throw new Error("invalid_settings");
+    } else if (key === "calculation") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_settings");
+      const target = (v) => Number.isInteger(v) && v >= 0 && v <= 54;
+      if (value.fatigueTarget !== void 0 && !target(value.fatigueTarget)) throw new Error("invalid_settings");
+      if (value.fatiguePresets !== void 0 && (!Array.isArray(value.fatiguePresets) || value.fatiguePresets.length < 1 || value.fatiguePresets.length > 12 || !value.fatiguePresets.every(target))) throw new Error("invalid_settings");
+      if (value.fatigueTargets !== void 0) {
+        if (!value.fatigueTargets || typeof value.fatigueTargets !== "object" || Array.isArray(value.fatigueTargets) || Object.entries(value.fatigueTargets).some(([id, v]) => !["1", "2", "3", "4"].includes(id) || v !== null && !target(v))) throw new Error("invalid_settings");
+      }
+      next.calculation = { ...next.calculation, ...value };
+      if (value.fatigueTargets) next.calculation.fatigueTargets = { ...next.calculation.fatigueTargets, ...value.fatigueTargets };
+      continue;
     } else {
       if (!value || Array.isArray(value) || typeof value !== "object" || Object.entries(value).some(([k, v]) => !Object.hasOwn(next[key], k) || typeof v !== "boolean")) throw new Error("invalid_settings");
       Object.assign(next[key], value);
@@ -283,7 +296,7 @@ function validateUpdate(u) {
   if (!exact(u, ["sessionId", "sequence", "observedAt", "reason", "timers"]) || !validId(u.sessionId) || !time(u.sequence) || !(u.observedAt === null || time(u.observedAt)) || !["observation", "settings"].includes(u.reason) || !Array.isArray(u.timers) || !u.timers.length || u.timers.length > 32) throw new Error("invalid_update");
   const ids = /* @__PURE__ */ new Set(), events = /* @__PURE__ */ new Set();
   for (const t of u.timers) {
-    if (!exact(t, ["id", "kind", "slot", "name", "state", "endAt", "events"]) || !kinds.includes(t.kind) || !Number.isInteger(t.slot) || t.slot < 1 || t.slot > 4 || t.id !== `${t.kind}:${t.slot}` || ids.has(t.id) || typeof t.name !== "string" || t.name.length > 200 || !["pending", "empty", "active", "complete", "cancelled"].includes(t.state) || !Array.isArray(t.events) || !t.events.length || t.events.length > 4 || (t.state === "active" ? !time(t.endAt) : t.endAt !== null)) throw new Error("invalid_timer");
+    if (!exact(t, ["id", "kind", "slot", "name", "state", "startAt", "endAt", "events"]) || !kinds.includes(t.kind) || !Number.isInteger(t.slot) || t.slot < 1 || t.slot > 4 || t.id !== `${t.kind}:${t.slot}` || ids.has(t.id) || typeof t.name !== "string" || t.name.length > 200 || !["pending", "empty", "active", "complete", "cancelled"].includes(t.state) || t.startAt !== null && !time(t.startAt) || !Array.isArray(t.events) || !t.events.length || t.events.length > 4 || (t.state === "active" ? !time(t.endAt) : t.endAt !== null)) throw new Error("invalid_timer");
     ids.add(t.id);
     const phases = /* @__PURE__ */ new Set();
     for (const e of t.events) {
@@ -299,7 +312,6 @@ function receiveUpdate(s, u, device, now) {
   const receipt = { sequence: u.sequence, receivedAt: now };
   if (s.session?.id !== u.sessionId || s.session.device !== device) return { ...receipt, status: "stale_session" };
   if (u.sequence <= s.session.sequence) return { ...receipt, status: "duplicate" };
-  if (u.sequence !== s.session.sequence + 1) return { ...receipt, status: "sequence_gap" };
   for (const t of u.timers) for (const e of t.events) {
     if (Object.values(s.timers).some((old) => old.id !== t.id && old.events.some((v) => v.id === e.id))) throw new Error("invalid_event_owner");
   }
@@ -409,20 +421,12 @@ async function handleTelegramWebhook(request, env, repo) {
       ...!active.length ? ["\u7A3C\u50CD\u4E2D\u306E\u30BF\u30A4\u30DE\u30FC\u306F\u3042\u308A\u307E\u305B\u3093"] : []
     ].join("\n");
   }
-  try {
-    const response = await (env.NOTIFICATION_SEND || fetch)(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      redirect: "error",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: escapeHtml(text.slice(0, 3e3)), parse_mode: "HTML" }),
-      signal: AbortSignal.timeout(15e3)
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) return json({ error: "reply_failed" }, 503);
-    return json({ ok: true });
-  } catch {
-    return json({ error: "reply_failed" }, 503);
-  }
+  return json({
+    method: "sendMessage",
+    chat_id: env.TELEGRAM_CHAT_ID,
+    text: escapeHtml(text.slice(0, 3e3)),
+    parse_mode: "HTML"
+  });
 }
 
 // server/src/api/router.js
@@ -670,6 +674,17 @@ var NotificationScheduler = class {
       } catch {
       }
     });
+    this.run(async () => {
+      try {
+        const snap = await snapshot(new Repository(this.env.DB));
+        const data = { type: "sync", timers: snap.timers, now: snap.now, offsetSec: snap.settings?.offsetSec ?? 0 };
+        writer.write(encoder.encode(`data: ${JSON.stringify(data)}
+
+`)).catch(() => {
+        });
+      } catch {
+      }
+    });
     return new Response(readable, {
       headers: {
         "Content-Type": "text/event-stream",
@@ -718,6 +733,13 @@ var NotificationScheduler = class {
       await this.ctx.storage.setAlarm(Date.now() + 6e4);
       const response = await route(request, this.env);
       await this.schedule();
+      if (["POST", "PATCH", "DELETE"].includes(request.method) && this.clients.size > 0 && response.ok) {
+        try {
+          const snap = await snapshot(new Repository(this.env.DB));
+          this.broadcast({ type: "update", timers: snap.timers, now: snap.now, offsetSec: snap.settings?.offsetSec ?? 0 });
+        } catch {
+        }
+      }
       return response;
     });
   }
