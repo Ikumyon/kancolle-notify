@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "艦これ 終了予定通知",
-  "version": "0.9.1",
-  "version_name": "0.9.1-beta",
+  "version": "0.9.2",
+  "version_name": "0.9.2-beta",
   "description": "ゲームから読み取った観測情報と送信状況を表示し、中央サーバーへ送信します。",
   "permissions": [
     "storage",
