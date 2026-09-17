@@ -87,7 +87,9 @@ ehthumbs.db
 .idea/
 *.swp
 *~
+# その他の無視ファイル
 desktop/dist/
 desktop/build/
 docs/old.zip
 kc3kai-release
+.agents

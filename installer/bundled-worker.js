@@ -391,7 +391,7 @@ async function handleTelegramWebhook(request, env, repo) {
   if (String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return json({ error: "forbidden" }, 403);
   if (!Number.isSafeInteger(body.update_id)) return json({ error: "invalid_update" }, 400);
   const [command, ...args] = String(message.text || "").trim().split(/\s+/);
-  const cmd = command.match(/^\/(offset|status|help)(?:@[A-Za-z0-9_]+)?$/)?.[1];
+  const cmd = command.match(/^\/(offset|status|help|test)(?:@[A-Za-z0-9_]+)?$/)?.[1];
   if (!cmd) return json({ ok: true });
   let text;
   if (cmd === "offset") {
@@ -408,16 +408,51 @@ async function handleTelegramWebhook(request, env, repo) {
       }
       return s.chatUpdates[body.update_id].text;
     });
+  } else if (cmd === "test") {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: env.TELEGRAM_CHAT_ID,
+          text: "<b>\u3010\u30C6\u30B9\u30C8\u901A\u77E5\u3011</b>\n\u8266\u3053\u308C\u901A\u77E5\u306E\u80FD\u52D5\u7684API\u9001\u4FE1\u30C6\u30B9\u30C8\u306B\u6210\u529F\u3057\u307E\u3057\u305F\uFF01",
+          parse_mode: "HTML"
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        text = "\u2705 Telegram API\u3078\u306E\u80FD\u52D5\u9001\u4FE1\u306B\u6210\u529F\u3057\u307E\u3057\u305F\uFF01(MessageID: " + (data.result?.message_id || "ok") + ")";
+      } else {
+        text = `\u274C Telegram API\u9001\u4FE1\u30A8\u30E9\u30FC: HTTP ${res.status}
+\u8A73\u7D30: ${data.description || "\u4E0D\u660E"} (\u30A8\u30E9\u30FC\u30B3\u30FC\u30C9: ${data.error_code || res.status})`;
+      }
+    } catch (e) {
+      text = "\u274C \u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u30A8\u30E9\u30FC: " + e.message;
+    }
   } else if (cmd === "help") {
-    text = "/offset <\u79D2\u6570> \u901A\u77E5\u6642\u523B\u306E\u5909\u66F4\n/status \u4E2D\u592E\u306E\u72B6\u614B\u3092\u8868\u793A\n/help \u3053\u306E\u6848\u5185\u3092\u8868\u793A";
+    text = "/offset <\u79D2\u6570> \u901A\u77E5\u6642\u523B\u306E\u5909\u66F4\n/status \u4E2D\u592E\u306E\u72B6\u614B\u3092\u8868\u793A\n/test Telegram\u901A\u77E5\u306E\u9001\u4FE1\u30C6\u30B9\u30C8\n/help \u3053\u306E\u6848\u5185\u3092\u8868\u793A";
   } else {
     const state = await snapshot(repo);
-    const active = state.timers.filter((t) => t.state === "active");
+    const now = state.now || Date.now();
+    const active = state.timers.filter((t) => t.state === "active").sort((a, b) => (a.endAt || 0) - (b.endAt || 0));
+    const timerLines = active.map((t) => {
+      const slotName = t.slot ? `\u7B2C${t.slot}${["repair", "build"].includes(t.kind) ? "\u30C9\u30C3\u30AF" : "\u8266\u968A"}` : "";
+      const title = [labels[t.kind], slotName, t.name].filter(Boolean).join(" ");
+      const statusText = Number.isSafeInteger(t.endAt) && t.endAt <= now ? "\u7D42\u4E86" : Number.isSafeInteger(t.endAt) ? new Date(t.endAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "\u4E0D\u660E";
+      return `${title}: ${statusText}`;
+    });
+    const recentHistory = (state.history || []).filter((h) => h.event === "delivery_sent" || h.event === "delivery_failed").slice(-3).map((h) => {
+      const p = h.data?.provider || "\u901A\u77E5";
+      const st = h.event === "delivery_sent" ? "\u6210\u529F" : `\u5931\u6557 (${h.data?.code || "\u30A8\u30E9\u30FC"})`;
+      return `${p}: ${st}`;
+    });
+    const historySection = recentHistory.length ? ["\u76F4\u8FD1\u306E\u914D\u4FE1: " + recentHistory.join(", ")] : [];
     text = [
       "\u4E2D\u592E\u306E\u72B6\u614B",
       "\u30AA\u30D5\u30BB\u30C3\u30C8: " + state.settings.offsetSec + "\u79D2",
       "\u6709\u52B9\u30D7\u30ED\u30D0\u30A4\u30C0: " + (Object.entries(state.settings.providers).filter(([, enabled]) => enabled).map(([p]) => p).join(", ") || "\u306A\u3057"),
-      ...active.map((t) => `${labels[t.kind]} ${t.slot || ""} ${t.name}: ${new Date(t.endAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}`),
+      ...historySection,
+      ...timerLines,
       ...!active.length ? ["\u7A3C\u50CD\u4E2D\u306E\u30BF\u30A4\u30DE\u30FC\u306F\u3042\u308A\u307E\u305B\u3093"] : []
     ].join("\n");
   }
