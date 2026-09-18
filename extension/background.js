@@ -345,6 +345,17 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
     if (!message || message.type === 'view-changed') return;
     bridge.handle(message).then(value => reply({ value }), e => reply({ error: e.message })); return true;
   });
+  if (chrome.runtime?.onConnect) {
+    chrome.runtime.onConnect.addListener(port => {
+      if (port.name === 'keep-alive') {
+        port.onMessage.addListener(msg => {
+          if (msg === 'ping') {
+            try { port.postMessage('pong'); } catch {}
+          }
+        });
+      }
+    });
+  }
   chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'retry') void bridge.flush(); });
   bridge.ready.then(async () => {
     if (bridge.connection && bridge.queue.length > 0) {

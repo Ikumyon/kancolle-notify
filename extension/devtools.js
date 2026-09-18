@@ -36,4 +36,32 @@ chrome.devtools.network.onRequestFinished.addListener(request => {
 });
 chrome.devtools.panels.create('観測・送信', '', 'panel.html');
 message({ type: 'collector', active: true }).catch(() => {});
-window.addEventListener('unload', () => { chrome.runtime.sendMessage({ type: 'collector', active: false }).catch(() => {}); });
+
+let keepAlivePort = null;
+function setupKeepAlive() {
+  try {
+    keepAlivePort = chrome.runtime.connect({ name: 'keep-alive' });
+    keepAlivePort.onDisconnect.addListener(() => {
+      keepAlivePort = null;
+      setTimeout(setupKeepAlive, 5000);
+    });
+  } catch {}
+}
+setupKeepAlive();
+const keepAliveTimer = setInterval(() => {
+  try {
+    if (keepAlivePort) {
+      keepAlivePort.postMessage('ping');
+    } else {
+      setupKeepAlive();
+    }
+  } catch {}
+}, 20000);
+
+window.addEventListener('unload', () => {
+  clearInterval(keepAliveTimer);
+  if (keepAlivePort) {
+    try { keepAlivePort.disconnect(); } catch {}
+  }
+  chrome.runtime.sendMessage({ type: 'collector', active: false }).catch(() => {});
+});

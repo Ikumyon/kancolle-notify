@@ -72,6 +72,7 @@ function reconcile(s, now) {
       if (!enabled || !s.settings.providers[provider]) continue;
       const jobs = Object.values(s.deliveries).filter((d) => d.timerId === timer.id && d.eventId === event.id && d.provider === provider);
       const sent = jobs.filter((d) => d.status === "sent");
+      const latest = sent.reduce((last, d) => !last || d.revision > last.revision ? d : last, null);
       const isCancelled = timer.state === "cancelled" || timer.state === "empty" && latest?.item?.state === "active";
       const isTimeChanged = latest && Number.isSafeInteger(event.endAt) && latest.eventEndAt !== event.endAt;
       const corrected = isTimeChanged || isCancelled;

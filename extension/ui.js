@@ -2,7 +2,7 @@ import { time, remainingText, statusLabels } from './core/display.js';
 import { repairProgress } from './core/recovery.js';
 const $ = selector => document.querySelector(selector);
 const call = async (type, extra = {}) => {
-  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('バックグラウンド応答タイムアウト（拡張機能を再読み込みしてください）')), 5000));
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('バックグラウンド応答タイムアウト（拡張機能を再読み込みしてください）')), 15000));
   const send = (async () => {
     const response = await chrome.runtime.sendMessage({ type, ...extra });
     if (response?.error) throw new Error(response.error); return response?.value;
@@ -225,8 +225,32 @@ async function refresh() {
 }
 chrome.runtime.onMessage.addListener(message => { if (message.type === 'view-changed') void refresh(); });
 $('#retry')?.addEventListener('click', () => call('retry').catch(e => { $('#notice').textContent = e.message; }));
+let keepAlivePort = null;
+function setupKeepAlive() {
+  try {
+    keepAlivePort = chrome.runtime.connect({ name: 'keep-alive' });
+    keepAlivePort.onDisconnect.addListener(() => {
+      keepAlivePort = null;
+      setTimeout(setupKeepAlive, 5000);
+    });
+  } catch {}
+}
+setupKeepAlive();
+const keepAliveTimer = setInterval(() => {
+  try {
+    if (keepAlivePort) keepAlivePort.postMessage('ping');
+    else setupKeepAlive();
+  } catch {}
+}, 20000);
+
 const timer = setInterval(countdown, 1000);
-window.addEventListener('unload', () => clearInterval(timer));
+window.addEventListener('unload', () => {
+  clearInterval(timer);
+  clearInterval(keepAliveTimer);
+  if (keepAlivePort) {
+    try { keepAlivePort.disconnect(); } catch {}
+  }
+});
 void refresh();
 
 if (isPopup) {
