@@ -112,7 +112,7 @@ export class NotificationScheduler {
     return this.run(async () => {
       await this.ctx.storage.setAlarm(Date.now() + 60000);
       const now = Date.now();
-      await dispatch(this.env, { send: this.env.NOTIFICATION_SEND || fetch });
+      await dispatch(this.env, { send: this.env.NOTIFICATION_SEND ? (...args) => this.env.NOTIFICATION_SEND(...args) : fetch });
       await this.checkDesktopNotifications(now);
       await this.schedule();
     });

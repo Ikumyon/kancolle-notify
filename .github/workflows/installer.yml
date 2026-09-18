@@ -75,7 +75,7 @@ jobs:
 
       - name: Build daemon
         working-directory: desktop/daemon
-        run: cargo build --release --locked
+        run: cargo build --release
 
       - name: Build GUI
         working-directory: desktop

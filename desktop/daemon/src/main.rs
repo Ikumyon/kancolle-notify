@@ -27,7 +27,8 @@ fn print_usage() {
     println!("  stop                    バックグラウンドの常駐プロセスを安全に停止");
     println!("  status                  現在の常駐状態と監視タイマーをJSONで出力");
     println!("  offset [SEC]            中央の通知オフセット時間を表示または変更 (例: offset -60)");
-    println!("  test                    デスクトップ通知の動作テストを実行");
+    println!("  test [KIND]             デスクトップ通知の動作テスト (例: test, test expedition, test repair)");
+    println!("  appid [CMD]             Windows通知名「艦これ通知」の登録を管理 (status | enable | disable)");
     println!("  autostart [CMD]         PC起動時の自動起動を管理 (status | enable | disable)");
     println!("  config [CMD]            設定の一覧表示および変更 (list | set <key> <val> | --json)");
     println!("  help                    このヘルプを表示");
@@ -205,8 +206,51 @@ fn cmd_autostart(args: &[String]) {
     }
 }
 
+fn cmd_appid(args: &[String]) {
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("status");
+    match sub {
+        "enable" => match platform::enable_custom_appid() {
+            Ok(_) => {
+                println!("[SUCCESS] Windows通知の送信元を「艦これ通知」として登録しました。");
+            }
+            Err(e) => {
+                eprintln!("[ERROR] 通知アプリ名の登録に失敗しました: {}", e);
+                std::process::exit(1);
+            }
+        },
+        "disable" => match platform::disable_custom_appid() {
+            Ok(_) => {
+                println!("[SUCCESS] Windows通知の登録を解除しました（PowerShell標準通知に戻ります）。");
+            }
+            Err(e) => {
+                eprintln!("[ERROR] 通知アプリ名の解除に失敗しました: {}", e);
+                std::process::exit(1);
+            }
+        },
+        "status" => match platform::is_custom_appid_enabled() {
+            Ok(enabled) => {
+                let is_json = args.iter().any(|a| a == "--json");
+                if is_json {
+                    println!("{}", serde_json::json!({ "custom_appid": enabled }));
+                } else {
+                    println!("Windows通知アプリ名「艦これ通知」: {}", if enabled { "有効 (登録済み)" } else { "無効 (PowerShell表示)" });
+                }
+            }
+            Err(e) => {
+                eprintln!("[ERROR] 通知アプリ名状態の確認に失敗しました: {}", e);
+                std::process::exit(1);
+            }
+        },
+        other => {
+            eprintln!("Unknown appid subcommand: {} (使用可能: status, enable, disable)", other);
+            std::process::exit(1);
+        }
+    }
+}
+
 fn print_config_pretty(cfg: &config::Config) {
     let autostart = platform::is_autostart_enabled().unwrap_or(false);
+    let custom_appid = platform::is_custom_appid_enabled().unwrap_or(false);
     let token_display = if cfg.token.is_empty() {
         "(未設定)".to_string()
     } else if cfg.token.len() <= 8 {
@@ -222,6 +266,7 @@ fn print_config_pretty(cfg: &config::Config) {
     println!("  端末トークン       : {}", token_display);
     println!("  サウンド通知       : {}", if cfg.play_sound { "有効 (true)" } else { "無効 (false)" });
     println!("  自動起動 (OS常駐)  : {}", if autostart { "有効 (true)" } else { "無効 (false)" });
+    println!("  通知アプリ名登録   : {}", if custom_appid { "艦これ通知 (有効)" } else { "PowerShell (無効)" });
     println!("========================================");
     println!("設定ファイル: config.json");
 }
@@ -253,9 +298,11 @@ fn cmd_config(args: &[String]) {
             let is_json = args.iter().any(|a| a == "--json");
             if is_json {
                 let autostart_enabled = platform::is_autostart_enabled().unwrap_or(false);
+                let custom_appid_enabled = platform::is_custom_appid_enabled().unwrap_or(false);
                 let mut v = serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
                 if let serde_json::Value::Object(ref mut map) = v {
                     map.insert("autostart".to_string(), serde_json::Value::Bool(autostart_enabled));
+                    map.insert("custom_appid".to_string(), serde_json::Value::Bool(custom_appid_enabled));
                 }
                 println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             } else {
@@ -265,9 +312,11 @@ fn cmd_config(args: &[String]) {
         "--json" => {
             let cfg = load_config();
             let autostart_enabled = platform::is_autostart_enabled().unwrap_or(false);
+            let custom_appid_enabled = platform::is_custom_appid_enabled().unwrap_or(false);
             let mut v = serde_json::to_value(&cfg).unwrap_or(serde_json::Value::Null);
             if let serde_json::Value::Object(ref mut map) = v {
                 map.insert("autostart".to_string(), serde_json::Value::Bool(autostart_enabled));
+                map.insert("custom_appid".to_string(), serde_json::Value::Bool(custom_appid_enabled));
             }
             println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
         }
@@ -279,6 +328,9 @@ fn cmd_config(args: &[String]) {
 }
 
 fn main() {
+    // 実行時にiconsフォルダおよび通知種別PNGが存在しなければ自動展開
+    platform::ensure_icons_dir();
+
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
 
@@ -305,10 +357,15 @@ fn main() {
         "status" => cmd_status(),
         "offset" => cmd_offset(&args),
         "autostart" => cmd_autostart(&args),
+        "appid" => cmd_appid(&args),
         "config" => cmd_config(&args),
         "test" => {
-            println!("[INFO] Sending test desktop notification...");
-            match platform::test_notification() {
+            let kind = args.get(2).map(|s| s.as_str());
+            println!(
+                "[INFO] Sending test desktop notification{}...",
+                kind.map(|k| format!(" (kind: {})", k)).unwrap_or_default()
+            );
+            match platform::test_notification(kind) {
                 Ok(_) => println!("[SUCCESS] Test notification sent!"),
                 Err(e) => eprintln!("[ERROR] Failed to send toast: {}", e),
             }

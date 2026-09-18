@@ -14,12 +14,17 @@ pub mod stub;
 #[cfg(not(any(windows, target_os = "linux")))]
 pub use stub as imp;
 
-pub fn show_notification(title: &str, message: &str, play_sound: bool) -> Result<(), String> {
-    imp::show_notification(title, message, play_sound)
+pub fn show_notification(
+    title: &str,
+    message: &str,
+    play_sound: bool,
+    icon_kind: Option<&str>,
+) -> Result<(), String> {
+    imp::show_notification(title, message, play_sound, icon_kind)
 }
 
-pub fn test_notification() -> Result<(), String> {
-    imp::test_notification()
+pub fn test_notification(kind: Option<&str>) -> Result<(), String> {
+    imp::test_notification(kind)
 }
 
 pub fn is_process_running(pid: u32) -> Result<bool, String> {
@@ -44,4 +49,20 @@ pub fn disable_autostart() -> Result<(), String> {
 
 pub fn is_autostart_enabled() -> Result<bool, String> {
     imp::is_autostart_enabled()
+}
+
+pub fn enable_custom_appid() -> Result<(), String> {
+    imp::enable_custom_appid()
+}
+
+pub fn disable_custom_appid() -> Result<(), String> {
+    imp::disable_custom_appid()
+}
+
+pub fn is_custom_appid_enabled() -> Result<bool, String> {
+    imp::is_custom_appid_enabled()
+}
+
+pub fn ensure_icons_dir() -> std::path::PathBuf {
+    imp::ensure_icons_dir()
 }

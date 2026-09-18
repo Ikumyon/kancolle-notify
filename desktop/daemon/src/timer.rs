@@ -57,5 +57,5 @@ pub fn format_notify_event(event: &NotifyEvent) -> (String, String) {
 pub fn handle_notify_event(config: &Config, event: &NotifyEvent) -> Result<(), String> {
     let (title, message) = format_notify_event(event);
     println!("[NOTIFY] {} - {}", title, message);
-    show_notification(&title, &message, config.play_sound)
+    show_notification(&title, &message, config.play_sound, event.kind.as_deref())
 }

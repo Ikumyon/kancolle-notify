@@ -9,11 +9,22 @@ export function deliveryStyle(d) {
   return { label: '予定通知', color: 0x3498db };
 }
 export function formatPlainText(d) {
-  const t = d.item, lines = [`【${deliveryStyle(d).label}】${labels[t.kind]} ${t.slot ? '第' + t.slot + (['repair', 'build'].includes(t.kind) ? 'ドック' : '艦隊') : ''} ${t.name}`];
+  const t = d.item, lines = [`【${deliveryStyle(d).label}】${labels[t.kind]} ${t.slot ? '第' + t.slot + (['repair', 'build'].includes(t.kind) ? 'ドック' : '艦隊') : ''} ${t.name || ''}`.trim()];
   const end = d.eventEndAt;
-  lines.push(d.type === 'correction' ? end ? '終了予定を更新しました' : 'この予定の通知は不要になりました'
-    : t.kind === 'akashi' ? d.phase === 'start' ? '最初の20分が経過する見込みです' : '艦隊の全回復見込みです'
-    : t.kind === 'fatigue' ? '目標condへの回復見込みです' : '終了予定のお知らせです');
+  if (d.type === 'correction') {
+    lines.push(end ? '終了予定を更新しました' : 'この予定の通知は不要になりました');
+  } else if (t.kind === 'akashi') {
+    if (d.phase === 'start') {
+      lines.push('最初の20分が経過する見込みです');
+      if (d.text) lines.push(d.text);
+    } else {
+      lines.push(d.text ? `${d.text} 全回復の見込みです` : '艦隊の全回復見込みです');
+    }
+  } else if (t.kind === 'fatigue') {
+    lines.push('目標condへの回復見込みです');
+  } else {
+    lines.push('終了予定のお知らせです');
+  }
   if (end) lines.push('予定時刻: ' + date(end));
   return lines.join('\n');
 }

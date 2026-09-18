@@ -86,6 +86,7 @@ function reconcile(s, now) {
           phase: event.phase,
           type,
           eventEndAt: event.endAt,
+          text: event.text || null,
           item: structuredClone(timer),
           status: "pending",
           dueAt,
@@ -101,6 +102,7 @@ function reconcile(s, now) {
         if (d.status === "pending") {
           d.dueAt = dueAt;
           d.item = structuredClone(timer);
+          d.text = event.text || null;
         }
       };
       if (corrected && timer.suppressedRevision !== timer.revision && !sent.some((d) => d.revision === timer.revision)) make("correction", now);
@@ -296,11 +298,13 @@ function validateUpdate(u) {
   if (!exact(u, ["sessionId", "sequence", "observedAt", "reason", "timers"]) || !validId(u.sessionId) || !time(u.sequence) || !(u.observedAt === null || time(u.observedAt)) || !["observation", "settings"].includes(u.reason) || !Array.isArray(u.timers) || !u.timers.length || u.timers.length > 32) throw new Error("invalid_update");
   const ids = /* @__PURE__ */ new Set(), events = /* @__PURE__ */ new Set();
   for (const t of u.timers) {
-    if (!exact(t, ["id", "kind", "slot", "name", "state", "startAt", "endAt", "events"]) || !kinds.includes(t.kind) || !Number.isInteger(t.slot) || t.slot < 1 || t.slot > 4 || t.id !== `${t.kind}:${t.slot}` || ids.has(t.id) || typeof t.name !== "string" || t.name.length > 200 || !["pending", "empty", "active", "complete", "cancelled"].includes(t.state) || t.startAt !== null && !time(t.startAt) || !Array.isArray(t.events) || !t.events.length || t.events.length > 4 || (t.state === "active" ? !time(t.endAt) : t.endAt !== null)) throw new Error("invalid_timer");
+    if (!exact(t, ["id", "kind", "slot", "name", "state", "startAt", "endAt", "events"]) || !kinds.includes(t.kind) || !Number.isInteger(t.slot) || t.slot < 1 || t.slot > 4 || t.id !== `${t.kind}:${t.slot}` || ids.has(t.id) || typeof t.name !== "string" || t.name.length > 200 || !["pending", "empty", "active", "complete", "cancelled"].includes(t.state) || t.startAt !== null && !time(t.startAt) || !Array.isArray(t.events) || !t.events.length || t.events.length > 10 || (t.state === "active" ? !time(t.endAt) : t.endAt !== null)) throw new Error("invalid_timer");
     ids.add(t.id);
     const phases = /* @__PURE__ */ new Set();
     for (const e of t.events) {
-      if (!exact(e, ["id", "phase", "endAt"]) || !validId(e.id) || !validId(e.phase) || events.has(e.id) || phases.has(e.phase) || (t.state === "active" ? !time(e.endAt) : e.endAt !== null)) throw new Error("invalid_event");
+      const hasText = Object.hasOwn(e, "text");
+      const validKeys = hasText ? ["id", "phase", "endAt", "text"] : ["id", "phase", "endAt"];
+      if (!exact(e, validKeys) || !validId(e.id) || !validId(e.phase) || events.has(e.id) || phases.has(e.phase) || hasText && (typeof e.text !== "string" || e.text.length > 200) || (t.state === "active" ? !time(e.endAt) : e.endAt !== null)) throw new Error("invalid_event");
       events.add(e.id);
       phases.add(e.phase);
     }
@@ -326,15 +330,16 @@ async function handleTimers(request, env, repo, device) {
   const body = await readBody(request);
   if (!body || Object.keys(body).length !== 1 || !Array.isArray(body.updates) || !body.updates.length || body.updates.length > 25) throw new Error("invalid_batch");
   body.updates.forEach(validateUpdate);
-  const results = await repo.mutate((s) => {
+  const { results, timers } = await repo.mutate((s) => {
     let stopped;
-    return body.updates.map((u) => {
+    const res = body.updates.map((u) => {
       const result = stopped ? { sequence: u.sequence, receivedAt: Date.now(), status: stopped } : receiveUpdate(s, u, device, Date.now());
       if (!["accepted", "duplicate"].includes(result.status)) stopped = result.status;
       return result;
     });
+    return { results: res, timers: structuredClone(s.timers) };
   });
-  return json({ results });
+  return json({ results, timers });
 }
 
 // server/src/api/handlers/manual.js
@@ -375,9 +380,22 @@ function deliveryStyle(d) {
   return { label: "\u4E88\u5B9A\u901A\u77E5", color: 3447003 };
 }
 function formatPlainText(d) {
-  const t = d.item, lines = [`\u3010${deliveryStyle(d).label}\u3011${labels[t.kind]} ${t.slot ? "\u7B2C" + t.slot + (["repair", "build"].includes(t.kind) ? "\u30C9\u30C3\u30AF" : "\u8266\u968A") : ""} ${t.name}`];
+  const t = d.item, lines = [`\u3010${deliveryStyle(d).label}\u3011${labels[t.kind]} ${t.slot ? "\u7B2C" + t.slot + (["repair", "build"].includes(t.kind) ? "\u30C9\u30C3\u30AF" : "\u8266\u968A") : ""} ${t.name || ""}`.trim()];
   const end = d.eventEndAt;
-  lines.push(d.type === "correction" ? end ? "\u7D42\u4E86\u4E88\u5B9A\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F" : "\u3053\u306E\u4E88\u5B9A\u306E\u901A\u77E5\u306F\u4E0D\u8981\u306B\u306A\u308A\u307E\u3057\u305F" : t.kind === "akashi" ? d.phase === "start" ? "\u6700\u521D\u306E20\u5206\u304C\u7D4C\u904E\u3059\u308B\u898B\u8FBC\u307F\u3067\u3059" : "\u8266\u968A\u306E\u5168\u56DE\u5FA9\u898B\u8FBC\u307F\u3067\u3059" : t.kind === "fatigue" ? "\u76EE\u6A19cond\u3078\u306E\u56DE\u5FA9\u898B\u8FBC\u307F\u3067\u3059" : "\u7D42\u4E86\u4E88\u5B9A\u306E\u304A\u77E5\u3089\u305B\u3067\u3059");
+  if (d.type === "correction") {
+    lines.push(end ? "\u7D42\u4E86\u4E88\u5B9A\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F" : "\u3053\u306E\u4E88\u5B9A\u306E\u901A\u77E5\u306F\u4E0D\u8981\u306B\u306A\u308A\u307E\u3057\u305F");
+  } else if (t.kind === "akashi") {
+    if (d.phase === "start") {
+      lines.push("\u6700\u521D\u306E20\u5206\u304C\u7D4C\u904E\u3059\u308B\u898B\u8FBC\u307F\u3067\u3059");
+      if (d.text) lines.push(d.text);
+    } else {
+      lines.push(d.text ? `${d.text} \u5168\u56DE\u5FA9\u306E\u898B\u8FBC\u307F\u3067\u3059` : "\u8266\u968A\u306E\u5168\u56DE\u5FA9\u898B\u8FBC\u307F\u3067\u3059");
+    }
+  } else if (t.kind === "fatigue") {
+    lines.push("\u76EE\u6A19cond\u3078\u306E\u56DE\u5FA9\u898B\u8FBC\u307F\u3067\u3059");
+  } else {
+    lines.push("\u7D42\u4E86\u4E88\u5B9A\u306E\u304A\u77E5\u3089\u305B\u3067\u3059");
+  }
   if (end) lines.push("\u4E88\u5B9A\u6642\u523B: " + date(end));
   return lines.join("\n");
 }
@@ -434,13 +452,46 @@ async function handleTelegramWebhook(request, env, repo) {
   } else {
     const state = await snapshot(repo);
     const now = state.now || Date.now();
-    const active = state.timers.filter((t) => t.state === "active").sort((a, b) => (a.endAt || 0) - (b.endAt || 0));
-    const timerLines = active.map((t) => {
-      const slotName = t.slot ? `\u7B2C${t.slot}${["repair", "build"].includes(t.kind) ? "\u30C9\u30C3\u30AF" : "\u8266\u968A"}` : "";
-      const title = [labels[t.kind], slotName, t.name].filter(Boolean).join(" ");
-      const statusText = Number.isSafeInteger(t.endAt) && t.endAt <= now ? "\u7D42\u4E86" : Number.isSafeInteger(t.endAt) ? new Date(t.endAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) : "\u4E0D\u660E";
-      return `${title}: ${statusText}`;
+    const formatRemain = (endAt) => {
+      if (!Number.isSafeInteger(endAt)) return "";
+      const diff = endAt - now;
+      const timeStr = new Date(endAt).toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" });
+      if (diff <= 0) return `(\u5B8C\u4E86 / ${timeStr})`;
+      const mins = Math.ceil(diff / 6e4);
+      const remain = mins >= 60 ? `${Math.floor(mins / 60)}\u6642\u9593${mins % 60}\u5206` : `${mins}\u5206`;
+      return `(\u3042\u3068${remain} / ${timeStr})`;
+    };
+    const fleetLines = [1, 2, 3, 4].map((slot) => {
+      const exp = state.timers.find((t) => t.kind === "expedition" && t.slot === slot);
+      const akashi = state.timers.find((t) => t.kind === "akashi" && t.slot === slot);
+      const fatigue = state.timers.find((t) => t.kind === "fatigue" && t.slot === slot);
+      if (exp && exp.state === "active") {
+        return `\u7B2C${slot}\u8266\u968A: \u9060\u5F81\u300C${exp.name}\u300D ${formatRemain(exp.endAt)}`;
+      }
+      if (akashi && akashi.state === "active") {
+        const events = akashi.events || [];
+        const earliestEvent = events.filter((e) => Number.isSafeInteger(e.endAt) && e.endAt > now).sort((a, b) => a.endAt - b.endAt)[0];
+        const displayEvent = earliestEvent || events[0];
+        const label = displayEvent?.text ? displayEvent.text : akashi.name ? `\u6CCA\u5730\u4FEE\u7406\u300C${akashi.name}\u300D` : "\u6CCA\u5730\u4FEE\u7406\u4E2D";
+        return `\u7B2C${slot}\u8266\u968A: ${label} ${formatRemain(displayEvent?.endAt || akashi.endAt)}`;
+      }
+      if (fatigue && fatigue.state === "active") {
+        return `\u7B2C${slot}\u8266\u968A: \u75B2\u52B4\u56DE\u5FA9\u4E2D ${formatRemain(fatigue.endAt)}`;
+      }
+      if (fatigue && fatigue.state === "complete") {
+        return `\u7B2C${slot}\u8266\u968A: \u5F85\u6A5F\u4E2D (\u5168\u5FEB)`;
+      }
+      return `\u7B2C${slot}\u8266\u968A: \u5F85\u6A5F\u4E2D`;
     });
+    const repairActive = state.timers.filter((t) => t.kind === "repair" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
+    const repairLines = repairActive.length ? repairActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u4FEE\u7406\u4E2D"} ${formatRemain(t.endAt)}`) : ["\u5168\u30C9\u30C3\u30AF\u7A7A\u304D"];
+    if (repairActive.length && repairActive.length < 4) {
+      repairLines.push(`\uFF08\u7A7A\u304D: ${4 - repairActive.length}\u30C9\u30C3\u30AF\uFF09`);
+    }
+    const buildActive = state.timers.filter((t) => t.kind === "build" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
+    const buildSection = buildActive.length ? ["", "\u3010\u5EFA\u9020\u3011", ...buildActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u5EFA\u9020\u4E2D"} ${formatRemain(t.endAt)}`)] : [];
+    const manualActive = state.timers.filter((t) => t.kind === "manual" && t.state === "active").sort((a, b) => (a.endAt || 0) - (b.endAt || 0));
+    const manualSection = manualActive.length ? ["", "\u3010\u624B\u52D5\u30BF\u30A4\u30DE\u30FC\u3011", ...manualActive.map((t) => `\u30FB${t.name} ${formatRemain(t.endAt)}`)] : [];
     const recentHistory = (state.history || []).filter((h) => h.event === "delivery_sent" || h.event === "delivery_failed").slice(-3).map((h) => {
       const p = h.data?.provider || "\u901A\u77E5";
       const st = h.event === "delivery_sent" ? "\u6210\u529F" : `\u5931\u6557 (${h.data?.code || "\u30A8\u30E9\u30FC"})`;
@@ -452,8 +503,14 @@ async function handleTelegramWebhook(request, env, repo) {
       "\u30AA\u30D5\u30BB\u30C3\u30C8: " + state.settings.offsetSec + "\u79D2",
       "\u6709\u52B9\u30D7\u30ED\u30D0\u30A4\u30C0: " + (Object.entries(state.settings.providers).filter(([, enabled]) => enabled).map(([p]) => p).join(", ") || "\u306A\u3057"),
       ...historySection,
-      ...timerLines,
-      ...!active.length ? ["\u7A3C\u50CD\u4E2D\u306E\u30BF\u30A4\u30DE\u30FC\u306F\u3042\u308A\u307E\u305B\u3093"] : []
+      "",
+      "\u3010\u8266\u968A\u3011",
+      ...fleetLines,
+      "",
+      "\u3010\u5165\u6E20\u3011",
+      ...repairLines,
+      ...buildSection,
+      ...manualSection
     ].join("\n");
   }
   return json({
@@ -525,12 +582,11 @@ var DiscordProvider = class extends BaseProvider {
     const webhookUrl = env.DISCORD_WEBHOOK_URL;
     const payload = formatDiscordPayload(delivery);
     try {
-      const response = await sendFn(webhookUrl, {
+      const fetcher = typeof sendFn === "function" ? (...args) => sendFn.call(globalThis, ...args) : fetch;
+      const response = await fetcher(webhookUrl, {
         method: "POST",
-        redirect: "error",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(15e3)
+        body: JSON.stringify(payload)
       });
       if (response.status === 204 || response.status === 200) {
         return { ok: true, channel: this.name };
@@ -545,6 +601,7 @@ var DiscordProvider = class extends BaseProvider {
         } catch {
         }
       }
+      console.error("[discord] API error status:", status);
       return {
         ok: false,
         channel: this.name,
@@ -552,7 +609,8 @@ var DiscordProvider = class extends BaseProvider {
         permanent: [400, 401, 403, 404].includes(status),
         retryAfter: retryAfterMs
       };
-    } catch {
+    } catch (e) {
+      console.error("[discord] send exception:", e);
       return { ok: false, channel: this.name, code: "transport", uncertain: true };
     }
   }
@@ -571,18 +629,18 @@ var TelegramProvider = class extends BaseProvider {
     const chatId = env.TELEGRAM_CHAT_ID;
     const text = "<b>\u8266\u3053\u308C\u901A\u77E5</b>\n" + escapeHtml(formatPlainText(delivery));
     try {
-      const response = await sendFn(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const fetcher = typeof sendFn === "function" ? (...args) => sendFn.call(globalThis, ...args) : fetch;
+      const response = await fetcher(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
-        redirect: "error",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
-        signal: AbortSignal.timeout(15e3)
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" })
       });
       const body = await response.json();
       const status = Number(body.error_code || response.status);
       if (response.ok && body.ok) {
         return { ok: true, channel: this.name, messageId: body.result?.message_id };
       }
+      console.error("[telegram] API error response:", body);
       return {
         ok: false,
         channel: this.name,
@@ -590,7 +648,8 @@ var TelegramProvider = class extends BaseProvider {
         permanent: [400, 401, 403, 404].includes(status),
         retryAfter: Math.max(0, Number(body.parameters?.retry_after) || 0) * 1e3
       };
-    } catch {
+    } catch (e) {
+      console.error("[telegram] send exception:", e);
       return { ok: false, channel: this.name, code: "transport", uncertain: true };
     }
   }
@@ -603,6 +662,7 @@ var NotificationDispatcher = class {
   }
   async dispatch(env, { now = () => Date.now(), send = fetch } = {}) {
     const repo = new Repository(env.DB), token = crypto.randomUUID();
+    const safeSend = typeof send === "function" ? (...args) => send.call(globalThis, ...args) : fetch;
     const claimed = await repo.mutate((s) => {
       reconcile(s, now());
       const ready = [];
@@ -622,8 +682,9 @@ var NotificationDispatcher = class {
       const provider = this.providers.find((p) => p.name === d.provider);
       let result;
       try {
-        result = provider.isConfigured(env) ? await provider.send({ ...d, sentAt: now() }, env, send) : { ok: false, permanent: true, code: "not_configured" };
-      } catch {
+        result = provider.isConfigured(env) ? await provider.send({ ...d, sentAt: now() }, env, safeSend) : { ok: false, permanent: true, code: "not_configured" };
+      } catch (e) {
+        console.error(`[dispatcher] error sending via ${d.provider}:`, e);
         result = { ok: false, uncertain: true, code: "transport" };
       }
       await repo.mutate((s) => {
@@ -782,7 +843,7 @@ var NotificationScheduler = class {
     return this.run(async () => {
       await this.ctx.storage.setAlarm(Date.now() + 6e4);
       const now = Date.now();
-      await dispatch(this.env, { send: this.env.NOTIFICATION_SEND || fetch });
+      await dispatch(this.env, { send: this.env.NOTIFICATION_SEND ? (...args) => this.env.NOTIFICATION_SEND(...args) : fetch });
       await this.checkDesktopNotifications(now);
       await this.schedule();
     });

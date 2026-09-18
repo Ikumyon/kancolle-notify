@@ -16,12 +16,11 @@ export class TelegramProvider extends BaseProvider {
     const text = '<b>艦これ通知</b>\n' + escapeHtml(formatPlainText(delivery));
 
     try {
-      const response = await sendFn(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const fetcher = typeof sendFn === 'function' ? (...args) => sendFn.call(globalThis, ...args) : fetch;
+      const response = await fetcher(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
-        redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
-        signal: AbortSignal.timeout(15000)
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' })
       });
 
       const body = await response.json();
@@ -31,6 +30,7 @@ export class TelegramProvider extends BaseProvider {
         return { ok: true, channel: this.name, messageId: body.result?.message_id };
       }
 
+      console.error('[telegram] API error response:', body);
       return {
         ok: false,
         channel: this.name,
@@ -38,7 +38,8 @@ export class TelegramProvider extends BaseProvider {
         permanent: [400, 401, 403, 404].includes(status),
         retryAfter: Math.max(0, Number(body.parameters?.retry_after) || 0) * 1000
       };
-    } catch {
+    } catch (e) {
+      console.error('[telegram] send exception:', e);
       return { ok: false, channel: this.name, code: 'transport', uncertain: true };
     }
   }

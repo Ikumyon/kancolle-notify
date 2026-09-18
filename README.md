@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ikumyon/kancolle-notify/releases/latest"><img src="https://img.shields.io/badge/version-0.9.2--beta-blue.svg" alt="Version"></a>
+  <a href="https://github.com/Ikumyon/kancolle-notify/releases/latest"><img src="https://img.shields.io/badge/version-0.9.3--beta-blue.svg" alt="Version"></a>
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-brightgreen" alt="Platform">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </p>

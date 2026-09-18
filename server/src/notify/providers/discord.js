@@ -20,12 +20,11 @@ export class DiscordProvider extends BaseProvider {
     const payload = formatDiscordPayload(delivery);
 
     try {
-      const response = await sendFn(webhookUrl, {
+      const fetcher = typeof sendFn === 'function' ? (...args) => sendFn.call(globalThis, ...args) : fetch;
+      const response = await fetcher(webhookUrl, {
         method: 'POST',
-        redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(15000)
+        body: JSON.stringify(payload)
       });
 
       if (response.status === 204 || response.status === 200) {
@@ -39,6 +38,7 @@ export class DiscordProvider extends BaseProvider {
       if (status === 429) {
         try { const body = await response.json(); retryAfterMs = Math.max(retryAfterMs, Number(body.retry_after) * 1000 || 0); } catch {}
       }
+      console.error('[discord] API error status:', status);
       return {
         ok: false,
         channel: this.name,
@@ -46,7 +46,8 @@ export class DiscordProvider extends BaseProvider {
         permanent: [400, 401, 403, 404].includes(status),
         retryAfter: retryAfterMs
       };
-    } catch {
+    } catch (e) {
+      console.error('[discord] send exception:', e);
       return { ok: false, channel: this.name, code: 'transport', uncertain: true };
     }
   }

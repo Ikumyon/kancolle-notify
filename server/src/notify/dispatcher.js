@@ -8,6 +8,7 @@ export class NotificationDispatcher {
   constructor(providers = [new DiscordProvider(), new TelegramProvider()]) { this.providers = providers; }
   async dispatch(env, { now = () => Date.now(), send = fetch } = {}) {
     const repo = new Repository(env.DB), token = crypto.randomUUID();
+    const safeSend = typeof send === 'function' ? (...args) => send.call(globalThis, ...args) : fetch;
     const claimed = await repo.mutate(s => {
       reconcile(s, now());
       const ready = [];
@@ -26,9 +27,12 @@ export class NotificationDispatcher {
       const provider = this.providers.find(p => p.name === d.provider);
       let result;
       try {
-        result = provider.isConfigured(env) ? await provider.send({ ...d, sentAt: now() }, env, send)
+        result = provider.isConfigured(env) ? await provider.send({ ...d, sentAt: now() }, env, safeSend)
           : { ok: false, permanent: true, code: 'not_configured' };
-      } catch { result = { ok: false, uncertain: true, code: 'transport' }; }
+      } catch (e) {
+        console.error(`[dispatcher] error sending via ${d.provider}:`, e);
+        result = { ok: false, uncertain: true, code: 'transport' };
+      }
       await repo.mutate(s => {
         const current = s.deliveries[d.id];
         if (!current || current.token !== token) return;

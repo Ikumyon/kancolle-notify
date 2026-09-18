@@ -250,6 +250,53 @@ class DaemonController(QObject):
         except Exception as e:
             return False, str(e)
 
+    def get_custom_appid(self) -> bool:
+        """Windows通知のアプリ名（AUMID: 艦これ通知）が登録されているか確認"""
+        if sys.platform != "win32" or not self.is_installed():
+            return False
+        try:
+            res = self._run_external(
+                [str(self.exe_path), "appid", "status", "--json"],
+                cwd=str(self.base_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._get_clean_env(),
+                close_fds=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=3
+            )
+            if res.returncode == 0:
+                data = json.loads(res.stdout)
+                return bool(data.get("custom_appid", False))
+        except Exception:
+            pass
+        return False
+
+    def set_custom_appid(self, enable: bool) -> tuple[bool, str]:
+        """Windows通知のアプリ名（AUMID: 艦これ通知）を登録または解除"""
+        if sys.platform != "win32" or not self.is_installed():
+            return False, f"{self.exe_name} が見つかりません。"
+        cmd = "enable" if enable else "disable"
+        try:
+            res = self._run_external(
+                [str(self.exe_path), "appid", cmd],
+                cwd=str(self.base_dir),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._get_clean_env(),
+                close_fds=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=5
+            )
+            out = (res.stdout + res.stderr).strip()
+            return res.returncode == 0, out
+        except Exception as e:
+            return False, str(e)
+
     def _run_external(self, *args, **kwargs):
         with external_dll_search_path():
             return subprocess.run(*args, **kwargs)

@@ -208,12 +208,15 @@ export function fatigueFor(game, fleet, target) {
 export const MIN_REPAIR = 1200000;
 export function repairProgress(ship, startAt, now) {
   const missing = ship.maxHp - ship.hp;
-  const tickMs = Math.max(1, Math.ceil(Math.ceil(Math.max(0, ship.repairMs - 30000) / 60000) * 60000 / missing));
+  const actualRepairMs = Math.ceil(Math.max(0, ship.repairMs - 30000) / 60000) * 60000;
+  const tickMs = Math.max(1, Math.ceil(actualRepairMs / missing));
   const perCycle = Math.max(1, Math.floor(MIN_REPAIR / tickMs));
   const totalCycles = Math.min(missing, Math.max(1, Math.ceil(tickMs * missing / MIN_REPAIR)));
   const cycles = Math.max(0, Math.floor((now - startAt) / MIN_REPAIR));
   const healed = cycles === 0 ? 0 : Math.min(missing, Math.max(cycles, Math.floor(cycles * MIN_REPAIR / tickMs)));
-  return { ...ship, hpNow: ship.hp + healed, healed, perCycle, endAt: startAt + totalCycles * MIN_REPAIR };
+  const healedAt20 = Math.min(missing, Math.max(1, Math.floor(MIN_REPAIR / tickMs)));
+  const finishAt = startAt + actualRepairMs;
+  return { ...ship, actualRepairMs, finishAt, healedAt20, hpNow: ship.hp + healed, healed, perCycle, endAt: startAt + totalCycles * MIN_REPAIR };
 }
 export function akashiFor(game, fleet, now) {
   const pending = { state: 'pending', endAt: null, detail: { reason: '母港・装備情報待ち' } };
@@ -234,17 +237,27 @@ export function akashiFor(game, fleet, now) {
     if (type === 31) cranes++;
   }
   const capacity = Math.min(6, 2 + cranes), ships = [];
+  let timeMod = 1;
+  if (ids.length >= 2) {
+    const second = game.ships[ids[1]], secondMaster = game.shipMasters[second?.api_ship_id];
+    if (second && secondMaster && secondMaster.api_stype === 19 && second.api_nowhp * 2 > second.api_maxhp && !docked(second.api_id)) {
+      timeMod = 5 / 6;
+    }
+  }
   for (const id of ids.slice(0, capacity)) {
     const s = game.ships[id];
     if (!s || !Number.isSafeInteger(s.api_nowhp) || !Number.isSafeInteger(s.api_maxhp)) return pending;
     if (docked(id) || s.api_nowhp >= s.api_maxhp || s.api_nowhp * 4 <= s.api_maxhp) continue;
     if (!Number.isSafeInteger(s.api_ndock_time) || s.api_ndock_time <= 0) return pending;
+    const repairMs = Math.floor(s.api_ndock_time * timeMod);
     ships.push(repairProgress({ id, name: game.shipMasters[s.api_ship_id]?.api_name || `艦ID ${id}`,
-      hp: s.api_nowhp, maxHp: s.api_maxhp, repairMs: s.api_ndock_time }, game.akashiAt[fleet.api_id], now));
+      hp: s.api_nowhp, maxHp: s.api_maxhp, repairMs }, game.akashiAt[fleet.api_id], now));
   }
   if (!ships.length) return { state: 'empty', endAt: null, detail: {} };
-  return { state: 'active', endAt: Math.max(...ships.map(s => s.endAt)),
-    detail: { startAt: game.akashiAt[fleet.api_id], firstAt: game.akashiAt[fleet.api_id] + MIN_REPAIR, cycleMs: MIN_REPAIR, ships } };
+  const startAt = game.akashiAt[fleet.api_id];
+  const endAt = Math.max(startAt + MIN_REPAIR, ...ships.map(s => s.finishAt));
+  return { state: 'active', endAt,
+    detail: { startAt, firstAt: startAt + MIN_REPAIR, cycleMs: MIN_REPAIR, timeMod, ships } };
 }
 
 export function targetFor(settings, slot) {

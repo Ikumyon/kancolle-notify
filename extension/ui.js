@@ -53,7 +53,7 @@ function receipt(parent, id) {
 function render() {
   const connAlert = $('#connection-alert');
   if (connAlert) connAlert.hidden = Boolean(view.configured);
-  $('#notice').textContent = view.observedAt ? '最終読取: ' + time(view.observedAt) + (view.collector ? ' ・ 監視中' : ' ・ 監視停止') : '未観測';
+  $('#notice').textContent = view.observedAt ? '最終読取: ' + time(view.observedAt) : '未観測';
   $('#collector-error').textContent = view.error ? '読取エラー: ' + view.error : '';
   const labels = { expedition: '遠征', fatigue: '疲労回復', akashi: '泊地修理', repair: '入渠', build: '建造' };
   const states = { active: '予定あり', pending: '情報待ち', complete: '完了（観測・計算結果）', empty: '対象なし', cancelled: '取消' };
@@ -119,7 +119,7 @@ function popupDeadline(element, endAt, empty = '未観測') {
 }
 function renderPopup(data) {
   popupView = data; clockAnchor = performance.now();
-  $('#notice').textContent = data.observedAt ? '読取 ' + time(data.observedAt) + (data.collector ? '' : ' ・ 監視停止') : '未観測';
+  $('#notice').textContent = data.observedAt ? '読取 ' + time(data.observedAt) : '未観測';
   if (data.error) $('#notice').textContent += ' ・ 読取エラー';
   if (!data.configured) {
     $('#send-summary').textContent = '⚠️ 中央サーバー未設定（設定画面でURLとトークンを入力してください）';

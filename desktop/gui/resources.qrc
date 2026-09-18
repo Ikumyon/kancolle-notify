@@ -1,0 +1,12 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file alias="icon.ico">../icon.ico</file>
+        <file alias="icons/expedition.png">../icons/expedition.png</file>
+        <file alias="icons/repair.png">../icons/repair.png</file>
+        <file alias="icons/build.png">../icons/build.png</file>
+        <file alias="icons/fatigue.png">../icons/fatigue.png</file>
+        <file alias="icons/akashi.png">../icons/akashi.png</file>
+        <file alias="icons/default.png">../icons/default.png</file>
+    </qresource>
+</RCC>

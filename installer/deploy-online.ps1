@@ -156,6 +156,17 @@ try {
         }
     }
 
+    # アイコンアセットの同期
+    $localIcons = Join-Path $PSScriptRoot "..\desktop\icons"
+    if (Test-Path $localIcons) {
+        $targetIcons = Join-Path $desktopDir "icons"
+        Copy-Item -Path $localIcons -Destination $targetIcons -Recurse -Force
+    }
+    $localIcon = Join-Path $PSScriptRoot "..\desktop\icon.ico"
+    if (Test-Path $localIcon) {
+        Copy-Item -Path $localIcon -Destination (Join-Path $desktopDir "icon.ico") -Force
+    }
+
     # --- 3. Cloudflare REST API による全自動デプロイ ---
     LogInfo "Cloudflare API トークンを検証中..."
     $verify = Invoke-CfApi -Uri "https://api.cloudflare.com/client/v4/user/tokens/verify"

@@ -25,16 +25,17 @@ export function reconcile(s, now) {
       if (!enabled || !s.settings.providers[provider]) continue;
       const jobs = Object.values(s.deliveries).filter(d => d.timerId === timer.id && d.eventId === event.id && d.provider === provider);
       const sent = jobs.filter(d => d.status === 'sent');
-      const latest = sent.reduce((last, d) => !last || d.revision > last.revision ? d : last, null);
-      const corrected = latest && (latest.eventEndAt !== event.endAt || latest.item.state !== timer.state);
+      const isCancelled = timer.state === 'cancelled' || (timer.state === 'empty' && latest?.item?.state === 'active');
+      const isTimeChanged = latest && Number.isSafeInteger(event.endAt) && latest.eventEndAt !== event.endAt;
+      const corrected = isTimeChanged || isCancelled;
       const make = (type, dueAt) => {
         const id = `${event.id}:${timer.revision}:${type}:${provider}`;
         let d = s.deliveries[id];
         if (!d) d = s.deliveries[id] = { id, timerId: timer.id, eventId: event.id, revision: timer.revision,
-          provider, phase: event.phase, type, eventEndAt: event.endAt, item: structuredClone(timer),
+          provider, phase: event.phase, type, eventEndAt: event.endAt, text: event.text || null, item: structuredClone(timer),
           status: 'pending', dueAt, nextTryAt: 0, leaseUntil: 0, attempts: 0, createdAt: now };
         if (d.status === 'cancelled') { d.status = 'pending'; d.leaseUntil = 0; }
-        if (d.status === 'pending') { d.dueAt = dueAt; d.item = structuredClone(timer); }
+        if (d.status === 'pending') { d.dueAt = dueAt; d.item = structuredClone(timer); d.text = event.text || null; }
       };
       if (corrected && timer.suppressedRevision !== timer.revision && !sent.some(d => d.revision === timer.revision)) make('correction', now);
       if (timer.state === 'active' && Number.isSafeInteger(event.endAt) && !sent.some(d => d.type === 'notification' && d.eventEndAt === event.endAt)) {
@@ -45,6 +46,7 @@ export function reconcile(s, now) {
 }
 export function updateTimer(s, input, now, reason = 'observation') {
   const old = s.timers[input.id];
+  if (old?.observedAt && input.observedAt && input.observedAt < old.observedAt) return;
   const changed = !old || JSON.stringify([old.name, old.state, old.events]) !== JSON.stringify([input.name, input.state, input.events]);
   const revision = (old?.revision || 0) + (changed ? 1 : 0);
   s.timers[input.id] = { ...input, revision, updatedAt: changed ? now : old.updatedAt,

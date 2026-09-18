@@ -11,8 +11,7 @@ export function endpoint(value) {
 }
 const emptyView = () => ({ timers: {}, updates: [], receipts: {}, observedAt: null, collector: false, error: '', hideBuildName: true });
 const isValidQueueItem = item =>
-  Boolean(item && typeof item === 'object' && typeof item.sourceId === 'string' &&
-    Number.isSafeInteger(item.sequence) && Array.isArray(item.timers));
+  Boolean(item && typeof item === 'object' && typeof item.id === 'string' && Array.isArray(item.timers));
 export function hasTimerChanged(last, current) {
   if (!last) return true;
   if (last.state !== current.state) return true;
@@ -24,7 +23,7 @@ export function hasTimerChanged(last, current) {
   if (lastEvents.length !== currEvents.length) return true;
   for (let i = 0; i < currEvents.length; i++) {
     const e1 = lastEvents[i], e2 = currEvents[i];
-    if (e1.id !== e2.id || e1.phase !== e2.phase || e1.endAt !== e2.endAt) return true;
+    if (e1.id !== e2.id || e1.phase !== e2.phase || e1.endAt !== e2.endAt || e1.text !== e2.text) return true;
   }
   return false;
 }
@@ -35,21 +34,16 @@ export class ObservationBridge {
     this.settingsSerial = Promise.resolve(); this.serial = Promise.resolve(); this.flushing = false;
     const loadStorage = () => new Promise(resolve => {
       try {
-        const p = storage.get(['connection', 'outbound', 'transport', 'calculationSettings', 'cachedView', 'cachedGame', 'cachedTimers', 'cachedClock', 'lastSyncedTimers'], s => resolve(s || {}));
+        const p = storage.get(['connection', 'outbound', 'transport', 'calculationSettings', 'cachedView', 'cachedGame', 'cachedTimers', 'cachedClock', 'lastSyncedTimers', 'cachedRegistry'], s => resolve(s || {}));
         if (p && typeof p.then === 'function') p.then(resolve).catch(() => resolve({}));
       } catch { resolve({}); }
     });
     this.ready = loadStorage().then(s => {
       this.connection = s.connection || null;
       this.queue = [];
-      this.transport = s.transport || { sources: {}, attempt: 0, blocked: false, events: {}, currentSource: null };
-      if (!this.transport.sources || typeof this.transport.sources !== 'object') this.transport.sources = {};
+      this.transport = s.transport || { attempt: 0, blocked: false, events: {}, currentSource: null };
       this.transport.attempt = 0;
       this.transport.blocked = false;
-      for (const src of Object.values(this.transport.sources)) {
-        src.sessionId = null;
-        src.sequence = 0;
-      }
       this.calculationSettings = calculationSettings(defaultCalculationSettings(), s.calculationSettings || {});
       this.model = calculationState(this.calculationSettings, this.transport.events);
       this.game = this.model.game;
@@ -63,6 +57,9 @@ export class ObservationBridge {
       }
       if (s.cachedTimers && typeof s.cachedTimers === 'object') {
         this.model.timers = { ...s.cachedTimers };
+      }
+      if (s.cachedRegistry && typeof s.cachedRegistry === 'object') {
+        Object.assign(this.model.registry, s.cachedRegistry);
       }
       if (s.cachedClock && typeof s.cachedClock === 'object') {
         this.clock = s.cachedClock;
@@ -94,6 +91,7 @@ export class ObservationBridge {
         portReady: this.game.portReady
       },
       cachedTimers: this.model.timers,
+      cachedRegistry: this.model.registry,
       cachedClock: this.clock,
       lastSyncedTimers: this.lastSyncedTimers
     });
@@ -113,8 +111,7 @@ export class ObservationBridge {
     this.changed();
   }
   source(id) {
-    if (!this.transport.sources[id]) this.transport.sources[id] = { requestId: id, sessionId: null, sequence: 0 };
-    return this.transport.sources[id];
+    return { requestId: id };
   }
   async queueTimers(sourceId, reason, observedAt, timers, displayTimers = timers) {
     for (const timer of displayTimers) {
@@ -126,8 +123,8 @@ export class ObservationBridge {
       this.transport.blocked = false;
       this.transport.attempt = 0;
     }
-    const source = this.source(sourceId), sequence = ++source.sequence, id = sourceId + ':' + sequence;
-    const item = { sourceId, sequence, observedAt, reason, timers };
+    const id = crypto.randomUUID();
+    const item = { id, sourceId, observedAt, reason, timers };
     this.view.receipts[id] = { status: 'queued', observedAt, reason };
     for (const timer of timers) this.view.timers[timer.id] = { data: structuredClone(timer), observationId: id };
     this.view.updates.unshift({ ...structuredClone(item), observationId: id });
@@ -135,7 +132,6 @@ export class ObservationBridge {
     const used = new Set([...Object.values(this.view.timers).map(t => t.observationId), ...this.view.updates.map(u => u.observationId)]);
     for (const key of Object.keys(this.view.receipts)) if (!used.has(key)) delete this.view.receipts[key];
     this.changed();
-    if (source.retired) { this.receipt(id, 'stopped', { error: 'stale_session' }); return; }
     this.queue.push(item);
     try { await this.persist(); await this.alarm.create('retry', { delayInMinutes: 1 }); }
     catch { this.receipt(id, 'stopped', { error: 'storage' }); throw new Error('storage'); }
@@ -187,89 +183,55 @@ export class ObservationBridge {
     let attempted = [];
     try {
       await this.alarm.create('retry', { delayInMinutes: 1 });
-      // ネットワーク待ち中もenqueueと画面更新は継続できる。
       for (let round = 0; round < 4 && this.queue.length; round++) {
         while (this.queue.length && !isValidQueueItem(this.queue[0])) {
           const bad = this.queue.shift();
-          if (bad?.sourceId && bad?.sequence) this.receipt(bad.sourceId + ':' + bad.sequence, 'stopped', { error: 'invalid_queue_item' });
+          if (bad?.id) this.receipt(bad.id, 'stopped', { error: 'invalid_queue_item' });
         }
         if (!this.queue.length) break;
 
-        const first = this.queue[0], source = this.source(first.sourceId);
         attempted = [];
-        for (const item of this.queue) { if (item.sourceId !== first.sourceId || attempted.length === 10) break; attempted.push(item); }
-        if (!source.sessionId) {
-          const result = await this.request('/api/session', { method: 'POST', body: JSON.stringify({ requestId: source.requestId }) });
-          if (typeof result.sessionId !== 'string') throw new Error('invalid_reply');
-          await this.exclusive(async () => { source.sessionId = result.sessionId; await this.persist(); });
+        for (const item of this.queue) {
+          if (attempted.length === 10) break;
+          attempted.push(item);
         }
-        const updates = [];
-        for (const { sourceId, ...item } of attempted) {
-          const candidate = { sessionId: source.sessionId, ...item };
-          if (new TextEncoder().encode(JSON.stringify({ updates: [...updates, candidate] })).byteLength > 2097152) {
-            if (!updates.length) throw new Error('invalid_data');
-            break;
-          }
-          updates.push(candidate);
-        }
-        attempted = attempted.slice(0, updates.length);
-        for (const item of attempted) this.receipt(item.sourceId + ':' + item.sequence, 'sending');
+        const updates = attempted.map(item => ({
+          observedAt: item.observedAt,
+          reason: item.reason,
+          timers: item.timers
+        }));
+        for (const item of attempted) this.receipt(item.id, 'sending');
         const result = await this.request('/api/timers', { method: 'POST', body: JSON.stringify({ updates }) });
-        if (!Array.isArray(result.results) || result.results.length !== attempted.length || result.results.some((r, i) =>
-          r.sequence !== attempted[i].sequence || !Number.isSafeInteger(r.receivedAt) || !['accepted', 'duplicate', 'stale_session', 'sequence_gap'].includes(r.status))) throw new Error('invalid_reply');
         await this.exclusive(async () => {
-          for (let i = 0; i < attempted.length; i++) {
-            const item = attempted[i], receipt = result.results[i], id = item.sourceId + ':' + item.sequence;
-            if (['accepted', 'duplicate'].includes(receipt.status)) {
-              for (const t of item.timers) {
-                this.lastSyncedTimers[t.id] = structuredClone(t);
-              }
-              this.queue = this.queue.filter(q => !(q.sourceId === item.sourceId && q.sequence === item.sequence));
-              this.receipt(id, 'sent', { receivedAt: receipt.receivedAt });
-            } else {
-              if (receipt.status === 'stale_session') {
-                source.retired = true;
-                for (const q of this.queue.filter(q => q.sourceId === item.sourceId)) this.receipt(q.sourceId + ':' + q.sequence, 'stopped', { error: 'stale_session' });
-                this.queue = this.queue.filter(q => q.sourceId !== item.sourceId);
-              } else if (receipt.status === 'sequence_gap') {
-                source.sessionId = null;
-                source.sequence = 0;
-                for (const q of this.queue.filter(q => q.sourceId === item.sourceId)) this.receipt(q.sourceId + ':' + q.sequence, 'stopped', { error: 'sequence_gap' });
-                this.queue = this.queue.filter(q => q.sourceId !== item.sourceId);
-                this.transport.blocked = false;
-              } else this.transport.blocked = true;
-              this.receipt(id, 'stopped', { error: receipt.status });
+          if (result.timers && typeof result.timers === 'object') {
+            for (const [tid, t] of Object.entries(result.timers)) {
+              if (t?.id) this.lastSyncedTimers[tid] = structuredClone(t);
             }
           }
-          this.transport.attempt = 0; await this.persist();
+          for (const item of attempted) {
+            for (const t of item.timers) {
+              this.lastSyncedTimers[t.id] = structuredClone(t);
+            }
+            this.queue = this.queue.filter(q => q.id !== item.id);
+            this.receipt(item.id, 'sent', { receivedAt: Date.now() });
+          }
+          this.transport.attempt = 0;
+          await this.persist();
         });
-        if (this.transport.blocked) break;
       }
       if (this.queue.length && !this.transport.blocked) await this.alarm.create('retry', { delayInMinutes: 1 });
       else await this.alarm.clear('retry');
     } catch (e) {
       await this.exclusive(async () => {
-        this.transport.blocked = ['authentication', 'invalid_data'].includes(e.message);
-        this.transport.attempt++;
-        for (const item of attempted) this.receipt(item.sourceId + ':' + item.sequence, this.transport.blocked ? 'stopped' : 'retry', { error: e.message });
-
-        // 3回以上連続で失敗、または致命的エラーでブロックされた場合は古いキューを諦めてクリア
-        if (this.transport.attempt >= 3 || this.transport.blocked) {
-          for (const item of this.queue) {
-            this.receipt(item.sourceId + ':' + item.sequence, 'stopped', { error: e.message || 'abandoned' });
-          }
-          this.queue = [];
-          for (const src of Object.values(this.transport.sources)) src.sessionId = null;
-          this.transport.attempt = 0;
-          this.transport.blocked = false;
+        for (const item of attempted.length ? attempted : this.queue) {
+          this.receipt(item.id, 'stopped', { error: e.message || 'connection_failed' });
         }
+        this.queue = [];
+        this.transport.attempt = 0;
+        this.transport.blocked = false;
         await this.persist();
       });
-      if (!this.transport.blocked && this.queue.length) {
-        await this.alarm.create('retry', { delayInMinutes: retryDelay(this.transport.attempt) / 60000 });
-      } else {
-        await this.alarm.clear('retry');
-      }
+      await this.alarm.clear('retry');
     } finally { this.flushing = false; }
   }
   async settings(patch) {
@@ -318,9 +280,6 @@ export class ObservationBridge {
       if (!/^[A-Za-z0-9_-]{32,200}$/.test(message.token)) throw new Error('invalid_token');
       await this.exclusive(async () => {
         const url = endpoint(message.url);
-        if (this.connection && (this.connection.url !== url || this.connection.token !== message.token)) {
-          for (const src of Object.values(this.transport.sources)) src.sessionId = null;
-        }
         this.queue = this.queue.filter(isValidQueueItem);
         this.connection = { url, token: message.token }; this.transport.blocked = false; this.transport.attempt = 0; this.view.hideBuildName = true; this.settingsCache = null; await this.persist();
         this.changed();
@@ -337,10 +296,6 @@ export class ObservationBridge {
         this.transport.blocked = false;
         this.transport.attempt = 0;
         this.queue = [];
-        for (const src of Object.values(this.transport.sources)) {
-          src.sessionId = null;
-          src.sequence = 0;
-        }
         await this.persist();
       });
       void this.flush(); return { ok: true };

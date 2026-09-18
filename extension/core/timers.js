@@ -87,20 +87,53 @@ export async function timerUpdates(s, reason = 'observation', onlyFatigue = fals
     // 回復時刻は再読取で基準が変わり得るため、活動識別には使わない。
     const active = t.state === 'active';
     const identity = await fingerprint([t.kind, t.slot, ['fatigue', 'akashi'].includes(t.kind) ? null : t.subjectId]);
-    const phases = t.kind === 'akashi' ? [['start', t.detail?.firstAt], ['full', t.endAt]] : [['complete', t.endAt]];
     const startAt = (active && Number.isSafeInteger(t.startAt ?? t.detail?.startAt)) ? (t.startAt ?? t.detail?.startAt) : null;
+    let rawEvents = [];
+    if (t.kind === 'akashi' && active && t.detail?.ships?.length) {
+      const firstAt = t.detail?.firstAt;
+      const ships = t.detail.ships;
+      const text20 = ships.map(s => {
+        const afterHp = Math.min(s.maxHp, s.hp + (s.healedAt20 || 0));
+        return `${s.name}: HP ${s.hp}→${afterHp} (+${afterHp - s.hp})`;
+      }).join('\n');
+      rawEvents.push({ phase: 'start', endAt: firstAt, text: text20 });
+
+      const over20 = ships.filter(s => s.finishAt > firstAt).sort((a, b) => a.finishAt - b.finishAt);
+      const grouped = new Map();
+      for (const s of over20) {
+        if (!grouped.has(s.finishAt)) grouped.set(s.finishAt, []);
+        grouped.get(s.finishAt).push(s);
+      }
+      let step = 1;
+      for (const [finishTime, groupShips] of grouped.entries()) {
+        const text = groupShips.map(s => `${s.name}: HP ${s.hp}→${s.maxHp} (+${s.missing})`).join('\n');
+        rawEvents.push({ phase: `repair_${step++}`, endAt: finishTime, text });
+      }
+    } else {
+      rawEvents.push({ phase: 'complete', endAt: active ? t.endAt : null });
+    }
+
     const changedEnd = active && previous?.endAt != null && previous.endAt !== t.endAt;
     const changedStart = active && ['akashi', 'fatigue'].includes(t.kind) && previous?.startAt != null && previous.startAt !== startAt;
     const changedSubject = previous?.identity && previous.identity !== identity && t.subjectId != null && !['fatigue', 'akashi'].includes(t.kind);
     const fresh = !previous || reason === 'observation' && (s.newActivities.has(t.id) || active && (previous.closed || previous.restart || changedSubject || changedEnd || changedStart));
-    const entry = fresh ? { activityId: crypto.randomUUID(), closed: false, restart: false } : previous;
-    if (active) { entry.identity = identity; entry.closed = false; entry.restart = false; entry.endAt = t.endAt; entry.startAt = startAt; }
+    const stableId = active && Number.isSafeInteger(t.endAt) ? `${t.kind}-${t.slot}-${t.endAt}` : crypto.randomUUID();
+    const entry = fresh ? { activityId: stableId, closed: false, restart: false } : previous;
+    if (active) {
+      if (Number.isSafeInteger(t.endAt)) entry.activityId = stableId;
+      entry.identity = identity; entry.closed = false; entry.restart = false; entry.endAt = t.endAt; entry.startAt = startAt;
+    }
     if (reason === 'observation' && ['complete', 'empty', 'cancelled'].includes(t.state)) { entry.closed = true; entry.endAt = null; }
     s.registry[t.id] = entry;
     updates.push({ id: t.id, kind: t.kind, slot: t.slot, name: t.name || '', state: t.state,
       startAt,
       endAt: active ? t.endAt : null,
-      events: phases.map(([phase, endAt]) => ({ id: entry.activityId + '-' + phase, phase, endAt: active && Number.isSafeInteger(endAt) ? endAt : null })) });
+      events: rawEvents.map(e => ({
+        id: entry.activityId + '-' + e.phase,
+        phase: e.phase,
+        endAt: active && Number.isSafeInteger(e.endAt) ? e.endAt : null,
+        ...(e.text ? { text: e.text } : {})
+      })) });
   }
   s.newActivities.clear();
   return updates;

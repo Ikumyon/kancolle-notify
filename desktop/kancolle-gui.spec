@@ -3,10 +3,10 @@
 
 a = Analysis(
     ['gui/main.py'],
-    pathex=[],
+    pathex=['gui'],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=['resources_rc', 'controller'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

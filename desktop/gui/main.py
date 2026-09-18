@@ -6,8 +6,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPalette
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -33,6 +33,11 @@ if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 from controller import DaemonController
+
+try:
+    import resources_rc
+except ImportError:
+    pass
 
 
 class SseClientThread(QThread):
@@ -61,7 +66,7 @@ class SseClientThread(QThread):
             url = f"{server_url}/api/events"
             headers = {
                 "Accept": "text/event-stream",
-                "User-Agent": "kancolle-gui/0.9.2"
+                "User-Agent": "kancolle-gui/0.9.3"
             }
             if token:
                 headers["Authorization"] = f"Bearer {token}"
@@ -169,6 +174,13 @@ class SettingsDialog(QDialog):
         form.addRow("", self.sound_check)
         form.addRow("", self.autostart_check)
 
+        if sys.platform == "win32":
+            self.appid_check = QCheckBox("通知の送信元を「艦これ通知」として登録する (推奨)")
+            self.appid_check.setChecked(self.controller.get_custom_appid())
+            self.appid_check.setStyleSheet("color: #e0e6ed;")
+            self.appid_check.setToolTip("有効にするとWindows通知ヘッダーに「艦これ通知」とアイコンが表示されます。\n無効の場合はPowerShell通知として動作します。")
+            form.addRow("", self.appid_check)
+
         layout.addLayout(form)
 
         # 中央から現在のオフセットをコマンドで非同期取得
@@ -184,7 +196,13 @@ class SettingsDialog(QDialog):
                     pass
         self.controller.run_command(["offset", "--json"], on_offset_loaded)
 
+        icons_btn = QPushButton("📁 アイコンフォルダを開く...")
+        icons_btn.setObjectName("cancelBtn")
+        icons_btn.setToolTip("通知種別アイコン（遠征・入渠・建造等）の保存フォルダをエクスプローラーで開きます")
+        icons_btn.clicked.connect(self.open_icons_folder)
+
         btn_layout = QHBoxLayout()
+        btn_layout.addWidget(icons_btn)
         btn_layout.addStretch()
 
         cancel_btn = QPushButton("キャンセル")
@@ -197,6 +215,10 @@ class SettingsDialog(QDialog):
         btn_layout.addWidget(cancel_btn)
         btn_layout.addWidget(save_btn)
         layout.addLayout(btn_layout)
+
+    def open_icons_folder(self):
+        folder = ensure_icons_dir(self.controller.base_dir)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def save_and_close(self):
         self.cfg["server_url"] = self.url_edit.text().strip()
@@ -216,6 +238,15 @@ class SettingsDialog(QDialog):
             if not ok:
                 QMessageBox.warning(self, "自動起動設定警告", f"自動起動の設定に失敗しました:\n{msg}")
 
+        # Windows通知アプリ名（AUMID）登録の変更を反映
+        if sys.platform == "win32" and hasattr(self, "appid_check"):
+            curr_appid = self.controller.get_custom_appid()
+            target_appid = self.appid_check.isChecked()
+            if curr_appid != target_appid:
+                ok, msg = self.controller.set_custom_appid(target_appid)
+                if not ok:
+                    QMessageBox.warning(self, "通知設定警告", f"通知アプリ名の設定に失敗しました:\n{msg}")
+
         if self.controller.save_config(self.cfg):
             self.accept()
         else:
@@ -227,6 +258,10 @@ class TimetableWindow(QWidget):
 
     def __init__(self, base_dir: Path):
         super().__init__()
+        self.base_dir = base_dir
+        app_icon = get_app_icon(base_dir)
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
         self.controller = DaemonController(base_dir)
         self.cached_timers = []
         self.offset_sec = 0
@@ -252,7 +287,7 @@ class TimetableWindow(QWidget):
         self.check_local_daemon_status()
 
     def init_ui(self):
-        self.setWindowTitle("艦これ 通知管理 v0.9.2-beta")
+        self.setWindowTitle("艦これ 通知管理 v0.9.3-beta")
         self.resize(850, 480)
         self.setMinimumSize(700, 360)
 
@@ -787,12 +822,59 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def get_app_icon(base_dir: Path) -> QIcon:
+    """Qt内蔵リソースからアイコンを取得。フォールバックとして外部ファイルも参照。"""
+    # 1. Qtリソースコンパイルによる内蔵アイコン
+    icon = QIcon(":/icon.ico")
+    if not icon.isNull():
+        return icon
+
+    # 2. 外部ファイルのフォールバック参照
+    for icon_name in ["icon.ico", "icon.png", "icons/app.ico", "icons/default.png"]:
+        icon_file = base_dir / icon_name
+        if icon_file.exists():
+            return QIcon(str(icon_file))
+
+    return QIcon()
+
+
+def ensure_icons_dir(base_dir: Path) -> Path:
+    """iconsフォルダおよび通知種別PNGが存在しない場合に自動生成"""
+    icons_dir = base_dir / "icons"
+    try:
+        if not icons_dir.exists():
+            icons_dir.mkdir(parents=True, exist_ok=True)
+
+        template_names = [
+            "expedition.png",
+            "repair.png",
+            "build.png",
+            "fatigue.png",
+            "akashi.png",
+            "default.png",
+        ]
+        app_icon = get_app_icon(base_dir)
+
+        for name in template_names:
+            target = icons_dir / name
+            if not target.exists():
+                # 内蔵専用アイコン（キャリーケース、バスタブ、クレーン等）
+                res_icon = QIcon(f":/icons/{name}")
+                if not res_icon.isNull():
+                    res_icon.pixmap(128, 128).save(str(target), "PNG")
+                elif not app_icon.isNull():
+                    app_icon.pixmap(128, 128).save(str(target), "PNG")
+    except Exception:
+        pass
+    return icons_dir
+
+
 def main():
-    # Windowsでタスクバーに個別アプリアイコンを表示させるためのID設定
+    # Windowsでタスクバーに個別アプリアイコンを表示させるためのID設定（AUMID統一）
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("kancolle.notify.timetable")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("kancolle.notify")
         except Exception:
             pass
 
@@ -800,15 +882,14 @@ def main():
     app.setStyle("Fusion")
 
     base_dir = get_base_dir()
-
-    # Windows & Linux 両対応のアイコン設定 (.ico / .png のある方を採用)
-    for icon_name in ["icon.ico", "icon.png"]:
-        icon_file = base_dir / icon_name
-        if icon_file.exists():
-            app.setWindowIcon(QIcon(str(icon_file)))
-            break
+    ensure_icons_dir(base_dir)
+    app_icon = get_app_icon(base_dir)
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
 
     window = TimetableWindow(base_dir)
+    if not app_icon.isNull():
+        window.setWindowIcon(app_icon)
     window.show()
 
     sys.exit(app.exec())
