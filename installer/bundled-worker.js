@@ -72,8 +72,9 @@ function reconcile(s, now) {
       if (!enabled || !s.settings.providers[provider]) continue;
       const jobs = Object.values(s.deliveries).filter((d) => d.timerId === timer.id && d.eventId === event.id && d.provider === provider);
       const sent = jobs.filter((d) => d.status === "sent");
-      const latest = sent.reduce((last, d) => !last || d.revision > last.revision ? d : last, null);
-      const corrected = latest && (latest.eventEndAt !== event.endAt || latest.item.state !== timer.state);
+      const isCancelled = timer.state === "cancelled" || timer.state === "empty" && latest?.item?.state === "active";
+      const isTimeChanged = latest && Number.isSafeInteger(event.endAt) && latest.eventEndAt !== event.endAt;
+      const corrected = isTimeChanged || isCancelled;
       const make = (type, dueAt) => {
         const id = `${event.id}:${timer.revision}:${type}:${provider}`;
         let d = s.deliveries[id];
@@ -114,6 +115,7 @@ function reconcile(s, now) {
 }
 function updateTimer(s, input, now, reason = "observation") {
   const old = s.timers[input.id];
+  if (old?.observedAt && input.observedAt && input.observedAt < old.observedAt) return;
   const changed = !old || JSON.stringify([old.name, old.state, old.events]) !== JSON.stringify([input.name, input.state, input.events]);
   const revision = (old?.revision || 0) + (changed ? 1 : 0);
   s.timers[input.id] = {
@@ -295,7 +297,7 @@ var object = (value) => value && typeof value === "object" && !Array.isArray(val
 var exact = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every((k) => Object.hasOwn(value, k));
 var time = (value) => Number.isSafeInteger(value) && value > 0;
 function validateUpdate(u) {
-  if (!exact(u, ["sessionId", "sequence", "observedAt", "reason", "timers"]) || !validId(u.sessionId) || !time(u.sequence) || !(u.observedAt === null || time(u.observedAt)) || !["observation", "settings"].includes(u.reason) || !Array.isArray(u.timers) || !u.timers.length || u.timers.length > 32) throw new Error("invalid_update");
+  if (!object(u) || !(u.observedAt === null || time(u.observedAt)) || !["observation", "settings"].includes(u.reason) || !Array.isArray(u.timers) || !u.timers.length || u.timers.length > 32) throw new Error("invalid_update");
   const ids = /* @__PURE__ */ new Set(), events = /* @__PURE__ */ new Set();
   for (const t of u.timers) {
     if (!exact(t, ["id", "kind", "slot", "name", "state", "startAt", "endAt", "events"]) || !kinds.includes(t.kind) || !Number.isInteger(t.slot) || t.slot < 1 || t.slot > 4 || t.id !== `${t.kind}:${t.slot}` || ids.has(t.id) || typeof t.name !== "string" || t.name.length > 200 || !["pending", "empty", "active", "complete", "cancelled"].includes(t.state) || t.startAt !== null && !time(t.startAt) || !Array.isArray(t.events) || !t.events.length || t.events.length > 10 || (t.state === "active" ? !time(t.endAt) : t.endAt !== null)) throw new Error("invalid_timer");
@@ -313,15 +315,12 @@ function validateUpdate(u) {
 }
 function receiveUpdate(s, u, device, now) {
   validateUpdate(u);
-  const receipt = { sequence: u.sequence, receivedAt: now };
-  if (s.session?.id !== u.sessionId || s.session.device !== device) return { ...receipt, status: "stale_session" };
-  if (u.sequence <= s.session.sequence) return { ...receipt, status: "duplicate" };
+  const receipt = { sequence: u.sequence ?? 0, receivedAt: now };
   for (const t of u.timers) for (const e of t.events) {
     if (Object.values(s.timers).some((old) => old.id !== t.id && old.events.some((v) => v.id === e.id))) throw new Error("invalid_event_owner");
   }
   for (const timer of u.timers) updateTimer(s, { ...structuredClone(timer), observedAt: u.observedAt }, now, u.reason);
-  s.session.sequence = u.sequence;
-  record(s, now, "timers_received", { sequence: u.sequence, count: u.timers.length, reason: u.reason });
+  record(s, now, "timers_received", { count: u.timers.length, reason: u.reason, observedAt: u.observedAt });
   return { ...receipt, status: "accepted" };
 }
 
@@ -409,23 +408,60 @@ async function handleTelegramWebhook(request, env, repo) {
   if (String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return json({ error: "forbidden" }, 403);
   if (!Number.isSafeInteger(body.update_id)) return json({ error: "invalid_update" }, 400);
   const [command, ...args] = String(message.text || "").trim().split(/\s+/);
-  const cmd = command.match(/^\/(offset|status|help|test)(?:@[A-Za-z0-9_]+)?$/)?.[1];
+  const cmd = command.match(/^\/(offset|provider|providers|status|fleet|dock|build|help|test)(?:@[A-Za-z0-9_]+)?$/)?.[1];
   if (!cmd) return json({ ok: true });
   let text;
   if (cmd === "offset") {
-    const valid = args.length === 1 && /^[+-]?\d+$/.test(args[0]) && Math.abs(Number(args[0])) <= 3600;
-    if (!valid) text = "\u4F7F\u3044\u65B9: /offset <\u79D2\u6570>\uFF08-3600\u301C+3600\uFF09";
-    else text = await repo.mutate((s) => {
-      s.chatUpdates ||= {};
-      if (!s.chatUpdates[body.update_id]) {
-        const now = Date.now();
-        applySettings(s, { offsetSec: Number(args[0]) }, now);
-        reconcile(s, now);
-        s.chatUpdates[body.update_id] = { at: now, text: Number(args[0]) + "\u79D2\u306B\u8A2D\u5B9A\u3057\u307E\u3057\u305F" };
-        for (const [id, update] of Object.entries(s.chatUpdates)) if (update.at < now - 7 * 864e5) delete s.chatUpdates[id];
-      }
-      return s.chatUpdates[body.update_id].text;
-    });
+    if (args.length === 0) {
+      const state = await snapshot(repo);
+      text = `\u73FE\u5728\u306E\u30AA\u30D5\u30BB\u30C3\u30C8: ${state.settings.offsetSec}\u79D2
+\u5909\u66F4\u3059\u308B\u5834\u5408: /offset <\u79D2\u6570>\uFF08-3600\u301C+3600\uFF09`;
+    } else {
+      const valid = args.length === 1 && /^[+-]?\d+$/.test(args[0]) && Math.abs(Number(args[0])) <= 3600;
+      if (!valid) text = "\u4F7F\u3044\u65B9: /offset <\u79D2\u6570>\uFF08-3600\u301C+3600\uFF09";
+      else text = await repo.mutate((s) => {
+        s.chatUpdates ||= {};
+        if (!s.chatUpdates[body.update_id]) {
+          const now = Date.now();
+          applySettings(s, { offsetSec: Number(args[0]) }, now);
+          reconcile(s, now);
+          s.chatUpdates[body.update_id] = { at: now, text: Number(args[0]) + "\u79D2\u306B\u8A2D\u5B9A\u3057\u307E\u3057\u305F" };
+          for (const [id, update] of Object.entries(s.chatUpdates)) if (update.at < now - 7 * 864e5) delete s.chatUpdates[id];
+        }
+        return s.chatUpdates[body.update_id].text;
+      });
+    }
+  } else if (cmd === "provider" || cmd === "providers") {
+    if (args.length === 2 && ["telegram", "discord"].includes(args[0].toLowerCase()) && ["on", "off", "enable", "disable"].includes(args[1].toLowerCase())) {
+      const provider = args[0].toLowerCase();
+      const enabled = ["on", "enable"].includes(args[1].toLowerCase());
+      text = await repo.mutate((s) => {
+        s.chatUpdates ||= {};
+        if (!s.chatUpdates[body.update_id]) {
+          const now = Date.now();
+          applySettings(s, { providers: { [provider]: enabled } }, now);
+          reconcile(s, now);
+          s.chatUpdates[body.update_id] = { at: now, text: `${provider} \u3092${enabled ? "\u6709\u52B9" : "\u7121\u52B9"}\u306B\u8A2D\u5B9A\u3057\u307E\u3057\u305F` };
+          for (const [id, update] of Object.entries(s.chatUpdates)) if (update.at < now - 7 * 864e5) delete s.chatUpdates[id];
+        }
+        return s.chatUpdates[body.update_id].text;
+      });
+    } else {
+      const state = await snapshot(repo);
+      const provList = Object.entries(state.settings.providers).map(([p, en]) => `\u30FB${p}: ${en ? "\u6709\u52B9" : "\u7121\u52B9"}`).join("\n");
+      const recentHistory = (state.history || []).filter((h) => h.event === "delivery_sent" || h.event === "delivery_failed").slice(-3).map((h) => {
+        const p = h.data?.provider || "\u901A\u77E5";
+        const st = h.event === "delivery_sent" ? "\u6210\u529F" : `\u5931\u6557 (${h.data?.code || "\u30A8\u30E9\u30FC"})`;
+        return `${p}: ${st}`;
+      });
+      const historySection = recentHistory.length ? ["\n\u3010\u76F4\u8FD1\u306E\u914D\u4FE1\u3011", ...recentHistory.map((h) => `\u30FB${h}`)] : [];
+      text = [
+        "\u3010\u901A\u77E5\u30D7\u30ED\u30D0\u30A4\u30C0\u3011",
+        provList || "\u306A\u3057",
+        ...historySection,
+        "\n\u5207\u308A\u66FF\u3048: /provider <telegram|discord> <on|off>"
+      ].join("\n");
+    }
   } else if (cmd === "test") {
     try {
       const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -448,7 +484,16 @@ async function handleTelegramWebhook(request, env, repo) {
       text = "\u274C \u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u30A8\u30E9\u30FC: " + e.message;
     }
   } else if (cmd === "help") {
-    text = "/offset <\u79D2\u6570> \u901A\u77E5\u6642\u523B\u306E\u5909\u66F4\n/status \u4E2D\u592E\u306E\u72B6\u614B\u3092\u8868\u793A\n/test Telegram\u901A\u77E5\u306E\u9001\u4FE1\u30C6\u30B9\u30C8\n/help \u3053\u306E\u6848\u5185\u3092\u8868\u793A";
+    text = [
+      "/status \u6B21\u306E\u901A\u77E5\u30BF\u30A4\u30DF\u30F3\u30B0\u4E00\u89A7",
+      "/fleet \u8266\u968A\u306E\u72B6\u614B\u3092\u8868\u793A",
+      "/dock \u5165\u6E20\uFF08\u4FEE\u7406\u30EA\u30B9\u30C8\uFF09\u3092\u8868\u793A",
+      "/build \u5EFA\u9020\u30C9\u30C3\u30AF\u306E\u72B6\u614B\u3092\u8868\u793A",
+      "/offset [\u79D2\u6570] \u901A\u77E5\u6642\u523B\u306E\u78BA\u8A8D\u30FB\u5909\u66F4",
+      "/provider \u30D7\u30ED\u30D0\u30A4\u30C0\u72B6\u614B\u306E\u78BA\u8A8D\u30FB\u5909\u66F4",
+      "/test Telegram\u901A\u77E5\u306E\u9001\u4FE1\u30C6\u30B9\u30C8",
+      "/help \u3053\u306E\u6848\u5185\u3092\u8868\u793A"
+    ].join("\n");
   } else {
     const state = await snapshot(repo);
     const now = state.now || Date.now();
@@ -461,57 +506,74 @@ async function handleTelegramWebhook(request, env, repo) {
       const remain = mins >= 60 ? `${Math.floor(mins / 60)}\u6642\u9593${mins % 60}\u5206` : `${mins}\u5206`;
       return `(\u3042\u3068${remain} / ${timeStr})`;
     };
-    const fleetLines = [1, 2, 3, 4].map((slot) => {
-      const exp = state.timers.find((t) => t.kind === "expedition" && t.slot === slot);
-      const akashi = state.timers.find((t) => t.kind === "akashi" && t.slot === slot);
-      const fatigue = state.timers.find((t) => t.kind === "fatigue" && t.slot === slot);
-      if (exp && exp.state === "active") {
-        return `\u7B2C${slot}\u8266\u968A: \u9060\u5F81\u300C${exp.name}\u300D ${formatRemain(exp.endAt)}`;
+    if (cmd === "fleet") {
+      const fleetLines = [1, 2, 3, 4].map((slot) => {
+        const exp = state.timers.find((t) => t.kind === "expedition" && t.slot === slot);
+        const akashi = state.timers.find((t) => t.kind === "akashi" && t.slot === slot);
+        const fatigue = state.timers.find((t) => t.kind === "fatigue" && t.slot === slot);
+        if (exp && exp.state === "active") {
+          return `\u7B2C${slot}\u8266\u968A: \u9060\u5F81\u300C${exp.name}\u300D ${formatRemain(exp.endAt)}`;
+        }
+        if (akashi && akashi.state === "active") {
+          const events = akashi.events || [];
+          const earliestEvent = events.filter((e) => Number.isSafeInteger(e.endAt) && e.endAt > now).sort((a, b) => a.endAt - b.endAt)[0];
+          const displayEvent = earliestEvent || events[0];
+          const label = displayEvent?.text ? displayEvent.text : akashi.name ? `\u6CCA\u5730\u4FEE\u7406\u300C${akashi.name}\u300D` : "\u6CCA\u5730\u4FEE\u7406\u4E2D";
+          return `\u7B2C${slot}\u8266\u968A: ${label} ${formatRemain(displayEvent?.endAt || akashi.endAt)}`;
+        }
+        if (fatigue && fatigue.state === "active") {
+          return `\u7B2C${slot}\u8266\u968A: \u75B2\u52B4\u56DE\u5FA9\u4E2D ${formatRemain(fatigue.endAt)}`;
+        }
+        if (fatigue && fatigue.state === "complete") {
+          return `\u7B2C${slot}\u8266\u968A: \u5F85\u6A5F\u4E2D (\u5168\u5FEB)`;
+        }
+        return `\u7B2C${slot}\u8266\u968A: \u5F85\u6A5F\u4E2D`;
+      });
+      text = ["\u3010\u8266\u968A\u3011", ...fleetLines].join("\n");
+    } else if (cmd === "dock") {
+      const repairActive = state.timers.filter((t) => t.kind === "repair" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
+      const repairLines = repairActive.length ? repairActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u4FEE\u7406\u4E2D"} ${formatRemain(t.endAt)}`) : ["\u5168\u30C9\u30C3\u30AF\u7A7A\u304D"];
+      if (repairActive.length && repairActive.length < 4) {
+        repairLines.push(`\uFF08\u7A7A\u304D: ${4 - repairActive.length}\u30C9\u30C3\u30AF\uFF09`);
       }
-      if (akashi && akashi.state === "active") {
-        const events = akashi.events || [];
-        const earliestEvent = events.filter((e) => Number.isSafeInteger(e.endAt) && e.endAt > now).sort((a, b) => a.endAt - b.endAt)[0];
-        const displayEvent = earliestEvent || events[0];
-        const label = displayEvent?.text ? displayEvent.text : akashi.name ? `\u6CCA\u5730\u4FEE\u7406\u300C${akashi.name}\u300D` : "\u6CCA\u5730\u4FEE\u7406\u4E2D";
-        return `\u7B2C${slot}\u8266\u968A: ${label} ${formatRemain(displayEvent?.endAt || akashi.endAt)}`;
+      text = ["\u3010\u5165\u6E20\u3011", ...repairLines].join("\n");
+    } else if (cmd === "build") {
+      const buildActive = state.timers.filter((t) => t.kind === "build" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
+      const buildLines = buildActive.length ? buildActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u5EFA\u9020\u4E2D"} ${formatRemain(t.endAt)}`) : ["\u5168\u5EFA\u9020\u30C9\u30C3\u30AF\u7A7A\u304D"];
+      text = ["\u3010\u5EFA\u9020\u3011", ...buildLines].join("\n");
+    } else {
+      const items = [];
+      for (const t of state.timers) {
+        if (t.state !== "active") continue;
+        if (t.kind === "expedition" && Number.isSafeInteger(t.endAt)) {
+          items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u9060\u5F81\u300C${t.name}\u300D`, endAt: t.endAt });
+        } else if (t.kind === "repair" && Number.isSafeInteger(t.endAt)) {
+          items.push({ title: `\u7B2C${t.slot}\u30C9\u30C3\u30AF \u5165\u6E20\u300C${t.name || "\u4FEE\u7406\u4E2D"}\u300D`, endAt: t.endAt });
+        } else if (t.kind === "build" && Number.isSafeInteger(t.endAt)) {
+          items.push({ title: `\u7B2C${t.slot}\u30C9\u30C3\u30AF \u5EFA\u9020${t.name ? `\u300C${t.name}\u300D` : ""}`, endAt: t.endAt });
+        } else if (t.kind === "manual" && Number.isSafeInteger(t.endAt)) {
+          items.push({ title: `\u624B\u52D5\u30BF\u30A4\u30DE\u30FC\u300C${t.name}\u300D`, endAt: t.endAt });
+        } else if (t.kind === "fatigue" && Number.isSafeInteger(t.endAt)) {
+          const condLabel = t.detail?.target ? `[cond${t.detail.target}]` : "";
+          items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u75B2\u52B4\u56DE\u5FA9\u5B8C\u4E86${condLabel}`, endAt: t.endAt });
+        } else if (t.kind === "akashi") {
+          const events = (t.events || []).filter((e) => Number.isSafeInteger(e.endAt) && e.endAt > now - 6e4);
+          const repairEvents = events.filter((e) => e.phase?.startsWith("repair_"));
+          if (repairEvents.length) {
+            for (const re of repairEvents) {
+              const shipNames = re.text ? re.text.split("\n").map((l) => l.split(":")[0].trim()).join("\u30FB") : "";
+              const nameLabel = shipNames ? `\u300C${shipNames}\u300D` : "";
+              items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u6CCA\u5730\u4FEE\u7406${nameLabel} \u5168\u5FEB`, endAt: re.endAt });
+            }
+          } else if (Number.isSafeInteger(t.endAt)) {
+            items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u6CCA\u5730\u4FEE\u7406`, endAt: t.endAt });
+          }
+        }
       }
-      if (fatigue && fatigue.state === "active") {
-        return `\u7B2C${slot}\u8266\u968A: \u75B2\u52B4\u56DE\u5FA9\u4E2D ${formatRemain(fatigue.endAt)}`;
-      }
-      if (fatigue && fatigue.state === "complete") {
-        return `\u7B2C${slot}\u8266\u968A: \u5F85\u6A5F\u4E2D (\u5168\u5FEB)`;
-      }
-      return `\u7B2C${slot}\u8266\u968A: \u5F85\u6A5F\u4E2D`;
-    });
-    const repairActive = state.timers.filter((t) => t.kind === "repair" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
-    const repairLines = repairActive.length ? repairActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u4FEE\u7406\u4E2D"} ${formatRemain(t.endAt)}`) : ["\u5168\u30C9\u30C3\u30AF\u7A7A\u304D"];
-    if (repairActive.length && repairActive.length < 4) {
-      repairLines.push(`\uFF08\u7A7A\u304D: ${4 - repairActive.length}\u30C9\u30C3\u30AF\uFF09`);
+      items.sort((a, b) => a.endAt - b.endAt);
+      const itemLines = items.length ? items.map((item) => `\u30FB${item.title} ${formatRemain(item.endAt)}`) : ["\u73FE\u5728\u3001\u901A\u77E5\u4E88\u5B9A\u306F\u3042\u308A\u307E\u305B\u3093\uFF08\u5F85\u6A5F\u4E2D\uFF09"];
+      text = ["\u3010\u6B21\u306E\u901A\u77E5\u4E88\u5B9A\u3011", ...itemLines].join("\n");
     }
-    const buildActive = state.timers.filter((t) => t.kind === "build" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
-    const buildSection = buildActive.length ? ["", "\u3010\u5EFA\u9020\u3011", ...buildActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u5EFA\u9020\u4E2D"} ${formatRemain(t.endAt)}`)] : [];
-    const manualActive = state.timers.filter((t) => t.kind === "manual" && t.state === "active").sort((a, b) => (a.endAt || 0) - (b.endAt || 0));
-    const manualSection = manualActive.length ? ["", "\u3010\u624B\u52D5\u30BF\u30A4\u30DE\u30FC\u3011", ...manualActive.map((t) => `\u30FB${t.name} ${formatRemain(t.endAt)}`)] : [];
-    const recentHistory = (state.history || []).filter((h) => h.event === "delivery_sent" || h.event === "delivery_failed").slice(-3).map((h) => {
-      const p = h.data?.provider || "\u901A\u77E5";
-      const st = h.event === "delivery_sent" ? "\u6210\u529F" : `\u5931\u6557 (${h.data?.code || "\u30A8\u30E9\u30FC"})`;
-      return `${p}: ${st}`;
-    });
-    const historySection = recentHistory.length ? ["\u76F4\u8FD1\u306E\u914D\u4FE1: " + recentHistory.join(", ")] : [];
-    text = [
-      "\u4E2D\u592E\u306E\u72B6\u614B",
-      "\u30AA\u30D5\u30BB\u30C3\u30C8: " + state.settings.offsetSec + "\u79D2",
-      "\u6709\u52B9\u30D7\u30ED\u30D0\u30A4\u30C0: " + (Object.entries(state.settings.providers).filter(([, enabled]) => enabled).map(([p]) => p).join(", ") || "\u306A\u3057"),
-      ...historySection,
-      "",
-      "\u3010\u8266\u968A\u3011",
-      ...fleetLines,
-      "",
-      "\u3010\u5165\u6E20\u3011",
-      ...repairLines,
-      ...buildSection,
-      ...manualSection
-    ].join("\n");
   }
   return json({
     method: "sendMessage",
