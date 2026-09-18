@@ -1,13 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const ICON_EXPEDITION: &[u8] = include_bytes!("../../../icons/expedition.png");
-const ICON_REPAIR: &[u8] = include_bytes!("../../../icons/repair.png");
-const ICON_BUILD: &[u8] = include_bytes!("../../../icons/build.png");
-const ICON_FATIGUE: &[u8] = include_bytes!("../../../icons/fatigue.png");
-const ICON_AKASHI: &[u8] = include_bytes!("../../../icons/akashi.png");
-const ICON_DEFAULT: &[u8] = include_bytes!("../../../icons/default.png");
-
 fn get_base_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -19,24 +12,61 @@ pub fn ensure_icons_dir() -> PathBuf {
     let base = get_base_dir();
     let icons_dir = base.join("icons");
     let _ = std::fs::create_dir_all(&icons_dir);
+    icons_dir
+}
 
-    let templates: &[(&str, &[u8])] = &[
-        ("expedition.png", ICON_EXPEDITION),
-        ("repair.png", ICON_REPAIR),
-        ("build.png", ICON_BUILD),
-        ("fatigue.png", ICON_FATIGUE),
-        ("akashi.png", ICON_AKASHI),
-        ("default.png", ICON_DEFAULT),
-    ];
+pub fn ensure_sounds_dir() -> PathBuf {
+    let base = get_base_dir();
+    let sounds_dir = base.join("sounds");
+    let _ = std::fs::create_dir_all(&sounds_dir);
+    sounds_dir
+}
 
-    for (name, bytes) in templates {
-        let p = icons_dir.join(name);
-        if !p.exists() {
-            let _ = std::fs::write(&p, bytes);
+pub fn find_sound_path(kind: Option<&str>) -> Option<PathBuf> {
+    let base = get_base_dir();
+    let sounds_dir = ensure_sounds_dir();
+
+    if let Some(k) = kind {
+        for ext in &["wav", "WAV"] {
+            let p = sounds_dir.join(format!("{}.{}", k, ext));
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
 
-    icons_dir
+    for candidate in &[
+        sounds_dir.join("default.wav"),
+        sounds_dir.join("default.WAV"),
+        base.join("default.wav"),
+    ] {
+        if candidate.exists() {
+            return Some(candidate.clone());
+        }
+    }
+
+    None
+}
+
+pub fn play_sound_file(path: &Path) {
+    let players = ["pw-play", "paplay", "aplay", "canberra-gtk-play"];
+    for player in &players {
+        let mut cmd = Command::new(player);
+        if *player == "canberra-gtk-play" {
+            cmd.arg("-f");
+        }
+        cmd.arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        if let Ok(mut child) = cmd.spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            break;
+        }
+    }
 }
 
 pub fn find_icon_path(kind: Option<&str>) -> Option<PathBuf> {
@@ -90,7 +120,11 @@ pub fn show_notification(
         .appname("艦これ通知");
 
     if play_sound {
-        notification.sound_name("message-new-instant");
+        if let Some(sound_path) = find_sound_path(icon_kind) {
+            play_sound_file(&sound_path);
+        } else {
+            notification.sound_name("message-new-instant");
+        }
     }
 
     if let Some(icon_path) = find_icon_path(icon_kind) {

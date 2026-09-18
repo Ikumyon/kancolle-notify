@@ -29,3 +29,11 @@ pub fn disable_autostart() -> Result<(), String> {
 pub fn is_autostart_enabled() -> Result<bool, String> {
     Ok(false)
 }
+
+pub fn ensure_icons_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("icons")
+}
+
+pub fn ensure_sounds_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("sounds")
+}

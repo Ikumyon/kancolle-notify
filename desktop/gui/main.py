@@ -201,8 +201,14 @@ class SettingsDialog(QDialog):
         icons_btn.setToolTip("通知種別アイコン（遠征・入渠・建造等）の保存フォルダをエクスプローラーで開きます")
         icons_btn.clicked.connect(self.open_icons_folder)
 
+        sounds_btn = QPushButton("🔊 通知音フォルダを開く...")
+        sounds_btn.setObjectName("cancelBtn")
+        sounds_btn.setToolTip("カスタム通知音（.wav）の保存フォルダをエクスプローラーで開きます")
+        sounds_btn.clicked.connect(self.open_sounds_folder)
+
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(icons_btn)
+        btn_layout.addWidget(sounds_btn)
         btn_layout.addStretch()
 
         cancel_btn = QPushButton("キャンセル")
@@ -218,6 +224,10 @@ class SettingsDialog(QDialog):
 
     def open_icons_folder(self):
         folder = ensure_icons_dir(self.controller.base_dir)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def open_sounds_folder(self):
+        folder = ensure_sounds_dir(self.controller.base_dir)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def save_and_close(self):
@@ -869,6 +879,17 @@ def ensure_icons_dir(base_dir: Path) -> Path:
     return icons_dir
 
 
+def ensure_sounds_dir(base_dir: Path) -> Path:
+    """soundsフォルダが存在しない場合に自動生成"""
+    sounds_dir = base_dir / "sounds"
+    try:
+        if not sounds_dir.exists():
+            sounds_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return sounds_dir
+
+
 def main():
     # Windowsでタスクバーに個別アプリアイコンを表示させるためのID設定（AUMID統一）
     if sys.platform == "win32":
@@ -883,6 +904,7 @@ def main():
 
     base_dir = get_base_dir()
     ensure_icons_dir(base_dir)
+    ensure_sounds_dir(base_dir)
     app_icon = get_app_icon(base_dir)
     if not app_icon.isNull():
         app.setWindowIcon(app_icon)

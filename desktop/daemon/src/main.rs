@@ -328,8 +328,9 @@ fn cmd_config(args: &[String]) {
 }
 
 fn main() {
-    // 実行時にiconsフォルダおよび通知種別PNGが存在しなければ自動展開
+    // 実行時にiconsおよびsoundsフォルダが存在しなければ作成
     platform::ensure_icons_dir();
+    platform::ensure_sounds_dir();
 
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");

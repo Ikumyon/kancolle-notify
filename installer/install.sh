@@ -8,7 +8,7 @@
 set -e
 
 REPO_SLUG="Ikumyon/kancolle-notify"
-INSTALL_DIR="${HOME}/.local/share/kancolle-notify"
+INSTALL_DIR="${INSTALL_DIR:-}"
 TEMP_DIR=$(mktemp -d -t kancolle-setup-XXXXXX)
 
 cleanup() {
@@ -22,7 +22,7 @@ echo "=========================================================="
 echo ""
 
 # 依存コマンドの確認
-for cmd in curl tar; do
+for cmd in curl tar python3; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "エラー: '$cmd' コマンドが必要です。パッケージマネージャからインストールしてください。" >&2
         exit 1
@@ -33,7 +33,7 @@ done
 CF_API_TOKEN="${1:-$CF_API_TOKEN}"
 DISCORD_WEBHOOK="${2:-$DISCORD_WEBHOOK}"
 
-DEFAULT_INSTALL_DIR="$(pwd)/kancolle-notify"
+DEFAULT_INSTALL_DIR="${HOME}/.local/share/kancolle-notify"
 if [ -z "$INSTALL_DIR" ]; then
     echo "インストール先ディレクトリ [デフォルト: ${DEFAULT_INSTALL_DIR}]:"
     read -r -p "> " USER_INPUT_DIR
@@ -63,14 +63,30 @@ mkdir -p "${INSTALL_DIR}/extension"
 
 echo "[1/5] GitHub (${REPO_SLUG}) から最新資材を取得中..."
 
-# 1. 拡張機能と Worker スクリプトの取得（最新 main.zip）
+# 1. 拡張機能と Worker スクリプトの取得（最新 main.tar.gz）
 echo "  -> ブラウザ拡張機能およびサーバー定義をダウンロード中..."
-curl -fsSL "https://github.com/${REPO_SLUG}/archive/refs/heads/main.zip" -o "${TEMP_DIR}/repo.zip"
-unzip -q "${TEMP_DIR}/repo.zip" -d "${TEMP_DIR}/repo_extracted"
+curl -fsSL "https://github.com/${REPO_SLUG}/archive/refs/heads/main.tar.gz" -o "${TEMP_DIR}/repo.tar.gz"
+mkdir -p "${TEMP_DIR}/repo_extracted"
+tar -xzf "${TEMP_DIR}/repo.tar.gz" -C "${TEMP_DIR}/repo_extracted"
 ROOT_FOLDER=$(find "${TEMP_DIR}/repo_extracted" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 
 if [ -d "${ROOT_FOLDER}/extension" ]; then
     cp -r "${ROOT_FOLDER}/extension/"* "${INSTALL_DIR}/extension/"
+fi
+
+# デスクトップ資材（アイコン・音声・README）の配置
+if [ -d "${ROOT_FOLDER}/desktop/icons" ]; then
+    mkdir -p "${INSTALL_DIR}/desktop/icons"
+    cp -r "${ROOT_FOLDER}/desktop/icons/"* "${INSTALL_DIR}/desktop/icons/"
+fi
+
+if [ -d "${ROOT_FOLDER}/desktop/sounds" ]; then
+    mkdir -p "${INSTALL_DIR}/desktop/sounds"
+    cp -r "${ROOT_FOLDER}/desktop/sounds/"* "${INSTALL_DIR}/desktop/sounds/"
+fi
+
+if [ -f "${ROOT_FOLDER}/desktop/README.md" ]; then
+    cp "${ROOT_FOLDER}/desktop/README.md" "${INSTALL_DIR}/desktop/README.md"
 fi
 
 WORKER_FILE="${ROOT_FOLDER}/installer/bundled-worker.js"
@@ -105,11 +121,6 @@ else
     fi
 fi
 
-# スクリプト類の配置
-if [ -d "${ROOT_FOLDER}/desktop" ]; then
-    cp -n "${ROOT_FOLDER}/desktop/"*.sh "${INSTALL_DIR}/desktop/" 2>/dev/null || true
-    chmod +x "${INSTALL_DIR}/desktop/"*.sh 2>/dev/null || true
-fi
 
 # 3. Cloudflare REST API 経由での全自動デプロイ
 echo "[3/5] Cloudflare Workers を自動構築・デプロイ中..."
@@ -219,13 +230,19 @@ EOF
 # 5. Linux アプリケーションメニュー登録 (.desktop)
 echo "[5/5] Linux デスクトップ環境へ登録中..."
 mkdir -p "${HOME}/.local/share/applications"
+
+APP_ICON="${INSTALL_DIR}/desktop/icons/app.png"
+if [ ! -f "$APP_ICON" ]; then
+    APP_ICON="${INSTALL_DIR}/desktop/icons/default.png"
+fi
+
 cat <<EOF > "${HOME}/.local/share/applications/kancolle-gui.desktop"
 [Desktop Entry]
 Type=Application
 Name=艦これ 通知管理
 Comment=艦これ通知システム管理ダッシュボード
 Exec="${INSTALL_DIR}/desktop/kancolle-gui"
-Icon=utilities-system-monitor
+Icon=${APP_ICON}
 Terminal=false
 Categories=Game;Utility;
 EOF
@@ -246,5 +263,5 @@ echo "   -> ${INSTALL_DIR}/extension"
 echo ""
 echo "2. 通知管理GUIの起動:"
 echo "   アプリメニューから「艦これ 通知管理」を開くか、以下のコマンドを実行してください："
-echo "   -> ${INSTALL_DIR}/desktop/start-gui.sh"
+echo "   -> ${INSTALL_DIR}/desktop/kancolle-gui"
 echo "=========================================================="

@@ -16,13 +16,6 @@ const AUMID_KEY: &str = r"HKCU\Software\Classes\AppUserModelId\kancolle.notify";
 const AUMID: &str = "kancolle.notify";
 const APP_DISPLAY_NAME: &str = "艦これ通知";
 
-const ICON_EXPEDITION: &[u8] = include_bytes!("../../../icons/expedition.png");
-const ICON_REPAIR: &[u8] = include_bytes!("../../../icons/repair.png");
-const ICON_BUILD: &[u8] = include_bytes!("../../../icons/build.png");
-const ICON_FATIGUE: &[u8] = include_bytes!("../../../icons/fatigue.png");
-const ICON_AKASHI: &[u8] = include_bytes!("../../../icons/akashi.png");
-const ICON_DEFAULT: &[u8] = include_bytes!("../../../icons/default.png");
-
 fn get_base_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -34,24 +27,59 @@ pub fn ensure_icons_dir() -> PathBuf {
     let base = get_base_dir();
     let icons_dir = base.join("icons");
     let _ = std::fs::create_dir_all(&icons_dir);
+    icons_dir
+}
 
-    let templates: &[(&str, &[u8])] = &[
-        ("expedition.png", ICON_EXPEDITION),
-        ("repair.png", ICON_REPAIR),
-        ("build.png", ICON_BUILD),
-        ("fatigue.png", ICON_FATIGUE),
-        ("akashi.png", ICON_AKASHI),
-        ("default.png", ICON_DEFAULT),
-    ];
+pub fn ensure_sounds_dir() -> PathBuf {
+    let base = get_base_dir();
+    let sounds_dir = base.join("sounds");
+    let _ = std::fs::create_dir_all(&sounds_dir);
+    sounds_dir
+}
 
-    for (name, bytes) in templates {
-        let p = icons_dir.join(name);
-        if !p.exists() {
-            let _ = std::fs::write(&p, bytes);
+pub fn find_sound_path(kind: Option<&str>) -> Option<PathBuf> {
+    let base = get_base_dir();
+    let sounds_dir = ensure_sounds_dir();
+
+    if let Some(k) = kind {
+        for ext in &["wav", "WAV"] {
+            let p = sounds_dir.join(format!("{}.{}", k, ext));
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
 
-    icons_dir
+    // デフォルトまたは共通通知音へのフォールバック
+    for candidate in &[
+        sounds_dir.join("default.wav"),
+        sounds_dir.join("default.WAV"),
+        base.join("default.wav"),
+    ] {
+        if candidate.exists() {
+            return Some(candidate.clone());
+        }
+    }
+
+    None
+}
+
+#[link(name = "winmm")]
+unsafe extern "system" {
+    fn PlaySoundW(pszSound: *const u16, hmod: usize, fdwSound: u32) -> i32;
+}
+
+const SND_ASYNC: u32 = 0x0001;
+const SND_NODEFAULT: u32 = 0x0002;
+const SND_FILENAME: u32 = 0x00020000;
+
+pub fn play_sound_file(path: &std::path::Path) {
+    use std::os::windows::ffi::OsStrExt;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    unsafe {
+        PlaySoundW(wide.as_ptr(), 0, SND_ASYNC | SND_FILENAME | SND_NODEFAULT);
+    }
 }
 
 pub fn find_icon_path(kind: Option<&str>) -> Option<PathBuf> {
@@ -169,7 +197,14 @@ pub fn show_notification(
         .duration(Duration::Short);
 
     if play_sound {
-        toast = toast.sound(Some(Sound::Default));
+        if let Some(sound_path) = find_sound_path(icon_kind) {
+            play_sound_file(&sound_path);
+            toast = toast.sound(None);
+        } else {
+            toast = toast.sound(Some(Sound::Default));
+        }
+    } else {
+        toast = toast.sound(None);
     }
 
     if let Some(icon_path) = find_icon_path(icon_kind) {

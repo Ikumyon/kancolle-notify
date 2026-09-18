@@ -97,6 +97,31 @@ try {
         LogInfo "ブラウザ拡張機能を配置しました: $extensionDir"
     }
 
+    # デスクトップ資材（アイコン・音声・README）の配置
+    $sourceDesktop = Join-Path $rootFolder.FullName "desktop"
+    if (Test-Path $sourceDesktop) {
+        $sourceIcons = Join-Path $sourceDesktop "icons"
+        if (Test-Path $sourceIcons) {
+            $destIcons = Join-Path $desktopDir "icons"
+            New-Item -ItemType Directory -Path $destIcons -Force | Out-Null
+            Copy-Item -Path (Join-Path $sourceIcons "*") -Destination $destIcons -Recurse -Force
+            LogInfo "通知アイコンを配置しました: $destIcons"
+        }
+
+        $sourceSounds = Join-Path $sourceDesktop "sounds"
+        if (Test-Path $sourceSounds) {
+            $destSounds = Join-Path $desktopDir "sounds"
+            New-Item -ItemType Directory -Path $destSounds -Force | Out-Null
+            Copy-Item -Path (Join-Path $sourceSounds "*") -Destination $destSounds -Recurse -Force
+            LogInfo "通知音声を配置しました: $destSounds"
+        }
+
+        $sourceReadme = Join-Path $sourceDesktop "README.md"
+        if (Test-Path $sourceReadme) {
+            Copy-Item -Path $sourceReadme -Destination (Join-Path $desktopDir "README.md") -Force
+        }
+    }
+
     # Workerスクリプト・スキーマの取得
     $workerFile = Join-Path $tempDir "bundled-worker.js"
     $sourceWorker = Join-Path $rootFolder.FullName "installer\bundled-worker.js"
@@ -156,11 +181,22 @@ try {
         }
     }
 
-    # アイコンアセットの同期
+    # アイコン・音声アセット・ドキュメントの同期（ローカルフォールバック）
     $localIcons = Join-Path $PSScriptRoot "..\desktop\icons"
     if (Test-Path $localIcons) {
         $targetIcons = Join-Path $desktopDir "icons"
-        Copy-Item -Path $localIcons -Destination $targetIcons -Recurse -Force
+        New-Item -ItemType Directory -Path $targetIcons -Force | Out-Null
+        Copy-Item -Path (Join-Path $localIcons "*") -Destination $targetIcons -Recurse -Force
+    }
+    $localSounds = Join-Path $PSScriptRoot "..\desktop\sounds"
+    if (Test-Path $localSounds) {
+        $targetSounds = Join-Path $desktopDir "sounds"
+        New-Item -ItemType Directory -Path $targetSounds -Force | Out-Null
+        Copy-Item -Path (Join-Path $localSounds "*") -Destination $targetSounds -Recurse -Force
+    }
+    $localReadme = Join-Path $PSScriptRoot "..\desktop\README.md"
+    if (Test-Path $localReadme) {
+        Copy-Item -Path $localReadme -Destination (Join-Path $desktopDir "README.md") -Force
     }
     $localIcon = Join-Path $PSScriptRoot "..\desktop\icon.ico"
     if (Test-Path $localIcon) {

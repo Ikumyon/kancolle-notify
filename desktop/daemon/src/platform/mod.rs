@@ -66,3 +66,7 @@ pub fn is_custom_appid_enabled() -> Result<bool, String> {
 pub fn ensure_icons_dir() -> std::path::PathBuf {
     imp::ensure_icons_dir()
 }
+
+pub fn ensure_sounds_dir() -> std::path::PathBuf {
+    imp::ensure_sounds_dir()
+}
