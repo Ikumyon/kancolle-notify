@@ -66,18 +66,17 @@ function reconcile(s, now) {
     timer.notifyAt = targetDeliveryTime(timer, s.settings.offsetSec);
     const enabled = timer.kind === "manual" || s.settings.categories[timer.kind];
     for (const d of Object.values(s.deliveries).filter((d2) => d2.timerId === timer.id)) {
-      if (["pending", "sending"].includes(d.status) && (!enabled || !s.settings.providers[d.provider] || d.revision !== timer.revision || !timer.events.some((e) => e.id === d.eventId) || d.type !== "correction" && timer.state !== "active")) d.status = "cancelled";
+      if (["pending", "sending"].includes(d.status) && (!enabled || !s.settings.providers[d.provider] || d.revision !== timer.revision || !timer.events.some((e) => e.id === d.eventId) || timer.state !== "active")) d.status = "cancelled";
     }
-    for (const event of timer.events) for (const provider of ["discord", "telegram"]) {
-      if (!enabled || !s.settings.providers[provider]) continue;
-      const jobs = Object.values(s.deliveries).filter((d) => d.timerId === timer.id && d.eventId === event.id && d.provider === provider);
-      const sent = jobs.filter((d) => d.status === "sent");
-      const latest = sent.reduce((last, d) => !last || d.revision > last.revision ? d : last, null);
-      const isCancelled = timer.state === "cancelled" || timer.state === "empty" && latest?.item?.state === "active";
-      const isTimeChanged = latest && Number.isSafeInteger(event.endAt) && latest.eventEndAt !== event.endAt;
-      const corrected = isTimeChanged || isCancelled;
-      const make = (type, dueAt) => {
-        const id = `${event.id}:${timer.revision}:${type}:${provider}`;
+    if (timer.state === "active") {
+      for (const event of timer.events) for (const provider of ["discord", "telegram"]) {
+        if (!enabled || !s.settings.providers[provider] || !Number.isSafeInteger(event.endAt)) continue;
+        const dueAt = event.endAt + (timer.kind === "manual" ? 0 : s.settings.offsetSec * 1e3);
+        if (dueAt <= now) continue;
+        const jobs = Object.values(s.deliveries).filter((d2) => d2.timerId === timer.id && d2.eventId === event.id && d2.provider === provider);
+        const sent = jobs.filter((d2) => d2.status === "sent");
+        if (sent.some((d2) => d2.type === "notification" && (d2.eventEndAt === event.endAt || d2.revision === timer.revision))) continue;
+        const id = `${event.id}:${timer.revision}:notification:${provider}`;
         let d = s.deliveries[id];
         if (!d) d = s.deliveries[id] = {
           id,
@@ -86,7 +85,7 @@ function reconcile(s, now) {
           revision: timer.revision,
           provider,
           phase: event.phase,
-          type,
+          type: "notification",
           eventEndAt: event.endAt,
           text: event.text || null,
           item: structuredClone(timer),
@@ -106,10 +105,6 @@ function reconcile(s, now) {
           d.item = structuredClone(timer);
           d.text = event.text || null;
         }
-      };
-      if (corrected && timer.suppressedRevision !== timer.revision && !sent.some((d) => d.revision === timer.revision)) make("correction", now);
-      if (timer.state === "active" && Number.isSafeInteger(event.endAt) && !sent.some((d) => d.type === "notification" && d.eventEndAt === event.endAt)) {
-        make("notification", event.endAt + (timer.kind === "manual" ? 0 : s.settings.offsetSec * 1e3));
       }
     }
   }
@@ -381,7 +376,7 @@ function deliveryStyle(d) {
 }
 function formatPlainText(d) {
   const t = d.item, lines = [`\u3010${deliveryStyle(d).label}\u3011${labels[t.kind]} ${t.slot ? "\u7B2C" + t.slot + (["repair", "build"].includes(t.kind) ? "\u30C9\u30C3\u30AF" : "\u8266\u968A") : ""} ${t.name || ""}`.trim()];
-  const end = d.eventEndAt;
+  const end = d.dueAt || d.eventEndAt;
   if (d.type === "correction") {
     lines.push(end ? "\u7D42\u4E86\u4E88\u5B9A\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F" : "\u3053\u306E\u4E88\u5B9A\u306E\u901A\u77E5\u306F\u4E0D\u8981\u306B\u306A\u308A\u307E\u3057\u305F");
   } else if (t.kind === "akashi") {
@@ -408,9 +403,17 @@ async function handleTelegramWebhook(request, env, repo) {
   if (!message) return json({ ok: true });
   if (String(message.chat?.id) !== String(env.TELEGRAM_CHAT_ID)) return json({ error: "forbidden" }, 403);
   if (!Number.isSafeInteger(body.update_id)) return json({ error: "invalid_update" }, 400);
-  const [command, ...args] = String(message.text || "").trim().split(/\s+/);
+  if (!message.text?.trim()) return json({ ok: true });
+  const [command, ...args] = message.text.trim().split(/\s+/);
   const cmd = command.match(/^\/(offset|provider|providers|status|fleet|dock|build|help|test)(?:@[A-Za-z0-9_]+)?$/)?.[1];
-  if (!cmd) return json({ ok: true });
+  if (!cmd) {
+    return json({
+      method: "sendMessage",
+      chat_id: env.TELEGRAM_CHAT_ID,
+      text: escapeHtml("\u30B3\u30DE\u30F3\u30C9\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002\u30B3\u30DE\u30F3\u30C9\u4E00\u89A7\u3092\u898B\u308B\u306B\u306F /help \u3092\u9001\u4FE1\u3057\u3066\u304F\u3060\u3055\u3044\u3002"),
+      parse_mode: "HTML"
+    });
+  }
   let text;
   if (cmd === "offset") {
     if (args.length === 0) {
@@ -498,6 +501,11 @@ async function handleTelegramWebhook(request, env, repo) {
   } else {
     const state = await snapshot(repo);
     const now = state.now || Date.now();
+    const offsetSec = state.settings?.offsetSec || 0;
+    const effectiveTime = (kind, endAt) => {
+      if (!Number.isSafeInteger(endAt)) return null;
+      return endAt + (kind === "manual" ? 0 : offsetSec * 1e3);
+    };
     const formatRemain = (endAt) => {
       if (!Number.isSafeInteger(endAt)) return "";
       const diff = endAt - now;
@@ -513,17 +521,18 @@ async function handleTelegramWebhook(request, env, repo) {
         const akashi = state.timers.find((t) => t.kind === "akashi" && t.slot === slot);
         const fatigue = state.timers.find((t) => t.kind === "fatigue" && t.slot === slot);
         if (exp && exp.state === "active") {
-          return `\u7B2C${slot}\u8266\u968A: \u9060\u5F81\u300C${exp.name}\u300D ${formatRemain(exp.endAt)}`;
+          return `\u7B2C${slot}\u8266\u968A: \u9060\u5F81\u300C${exp.name}\u300D ${formatRemain(effectiveTime("expedition", exp.endAt))}`;
         }
         if (akashi && akashi.state === "active") {
           const events = akashi.events || [];
-          const earliestEvent = events.filter((e) => Number.isSafeInteger(e.endAt) && e.endAt > now).sort((a, b) => a.endAt - b.endAt)[0];
+          const earliestEvent = events.map((e) => ({ ...e, effEndAt: effectiveTime("akashi", e.endAt) })).filter((e) => Number.isSafeInteger(e.effEndAt) && e.effEndAt > now).sort((a, b) => a.effEndAt - b.effEndAt)[0];
           const displayEvent = earliestEvent || events[0];
           const label = displayEvent?.text ? displayEvent.text : akashi.name ? `\u6CCA\u5730\u4FEE\u7406\u300C${akashi.name}\u300D` : "\u6CCA\u5730\u4FEE\u7406\u4E2D";
-          return `\u7B2C${slot}\u8266\u968A: ${label} ${formatRemain(displayEvent?.endAt || akashi.endAt)}`;
+          const displayTime = displayEvent?.effEndAt || effectiveTime("akashi", displayEvent?.endAt || akashi.endAt);
+          return `\u7B2C${slot}\u8266\u968A: ${label} ${formatRemain(displayTime)}`;
         }
         if (fatigue && fatigue.state === "active") {
-          return `\u7B2C${slot}\u8266\u968A: \u75B2\u52B4\u56DE\u5FA9\u4E2D ${formatRemain(fatigue.endAt)}`;
+          return `\u7B2C${slot}\u8266\u968A: \u75B2\u52B4\u56DE\u5FA9\u4E2D ${formatRemain(effectiveTime("fatigue", fatigue.endAt))}`;
         }
         if (fatigue && fatigue.state === "complete") {
           return `\u7B2C${slot}\u8266\u968A: \u5F85\u6A5F\u4E2D (\u5168\u5FEB)`;
@@ -533,41 +542,41 @@ async function handleTelegramWebhook(request, env, repo) {
       text = ["\u3010\u8266\u968A\u3011", ...fleetLines].join("\n");
     } else if (cmd === "dock") {
       const repairActive = state.timers.filter((t) => t.kind === "repair" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
-      const repairLines = repairActive.length ? repairActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u4FEE\u7406\u4E2D"} ${formatRemain(t.endAt)}`) : ["\u5168\u30C9\u30C3\u30AF\u7A7A\u304D"];
+      const repairLines = repairActive.length ? repairActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u4FEE\u7406\u4E2D"} ${formatRemain(effectiveTime("repair", t.endAt))}`) : ["\u5168\u30C9\u30C3\u30AF\u7A7A\u304D"];
       if (repairActive.length && repairActive.length < 4) {
         repairLines.push(`\uFF08\u7A7A\u304D: ${4 - repairActive.length}\u30C9\u30C3\u30AF\uFF09`);
       }
       text = ["\u3010\u5165\u6E20\u3011", ...repairLines].join("\n");
     } else if (cmd === "build") {
       const buildActive = state.timers.filter((t) => t.kind === "build" && t.state === "active").sort((a, b) => (a.slot || 0) - (b.slot || 0));
-      const buildLines = buildActive.length ? buildActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u5EFA\u9020\u4E2D"} ${formatRemain(t.endAt)}`) : ["\u5168\u5EFA\u9020\u30C9\u30C3\u30AF\u7A7A\u304D"];
+      const buildLines = buildActive.length ? buildActive.map((t) => `\u7B2C${t.slot}\u30C9\u30C3\u30AF: ${t.name || "\u5EFA\u9020\u4E2D"} ${formatRemain(effectiveTime("build", t.endAt))}`) : ["\u5168\u5EFA\u9020\u30C9\u30C3\u30AF\u7A7A\u304D"];
       text = ["\u3010\u5EFA\u9020\u3011", ...buildLines].join("\n");
     } else {
       const items = [];
       for (const t of state.timers) {
         if (t.state !== "active") continue;
         if (t.kind === "expedition" && Number.isSafeInteger(t.endAt)) {
-          items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u9060\u5F81\u300C${t.name}\u300D`, endAt: t.endAt });
+          items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u9060\u5F81\u300C${t.name}\u300D`, endAt: effectiveTime(t.kind, t.endAt) });
         } else if (t.kind === "repair" && Number.isSafeInteger(t.endAt)) {
-          items.push({ title: `\u7B2C${t.slot}\u30C9\u30C3\u30AF \u5165\u6E20\u300C${t.name || "\u4FEE\u7406\u4E2D"}\u300D`, endAt: t.endAt });
+          items.push({ title: `\u7B2C${t.slot}\u30C9\u30C3\u30AF \u5165\u6E20\u300C${t.name || "\u4FEE\u7406\u4E2D"}\u300D`, endAt: effectiveTime(t.kind, t.endAt) });
         } else if (t.kind === "build" && Number.isSafeInteger(t.endAt)) {
-          items.push({ title: `\u7B2C${t.slot}\u30C9\u30C3\u30AF \u5EFA\u9020${t.name ? `\u300C${t.name}\u300D` : ""}`, endAt: t.endAt });
+          items.push({ title: `\u7B2C${t.slot}\u30C9\u30C3\u30AF \u5EFA\u9020${t.name ? `\u300C${t.name}\u300D` : ""}`, endAt: effectiveTime(t.kind, t.endAt) });
         } else if (t.kind === "manual" && Number.isSafeInteger(t.endAt)) {
-          items.push({ title: `\u624B\u52D5\u30BF\u30A4\u30DE\u30FC\u300C${t.name}\u300D`, endAt: t.endAt });
+          items.push({ title: `\u624B\u52D5\u30BF\u30A4\u30DE\u30FC\u300C${t.name}\u300D`, endAt: effectiveTime(t.kind, t.endAt) });
         } else if (t.kind === "fatigue" && Number.isSafeInteger(t.endAt)) {
           const condLabel = t.detail?.target ? `[cond${t.detail.target}]` : "";
-          items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u75B2\u52B4\u56DE\u5FA9\u5B8C\u4E86${condLabel}`, endAt: t.endAt });
+          items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u75B2\u52B4\u56DE\u5FA9\u5B8C\u4E86${condLabel}`, endAt: effectiveTime(t.kind, t.endAt) });
         } else if (t.kind === "akashi") {
-          const events = (t.events || []).filter((e) => Number.isSafeInteger(e.endAt) && e.endAt > now - 6e4);
+          const events = (t.events || []).map((e) => ({ ...e, effEndAt: effectiveTime("akashi", e.endAt) })).filter((e) => Number.isSafeInteger(e.effEndAt) && e.effEndAt > now - 6e4);
           const repairEvents = events.filter((e) => e.phase?.startsWith("repair_"));
           if (repairEvents.length) {
             for (const re of repairEvents) {
               const shipNames = re.text ? re.text.split("\n").map((l) => l.split(":")[0].trim()).join("\u30FB") : "";
               const nameLabel = shipNames ? `\u300C${shipNames}\u300D` : "";
-              items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u6CCA\u5730\u4FEE\u7406${nameLabel} \u5168\u5FEB`, endAt: re.endAt });
+              items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u6CCA\u5730\u4FEE\u7406${nameLabel} \u5168\u5FEB`, endAt: re.effEndAt });
             }
           } else if (Number.isSafeInteger(t.endAt)) {
-            items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u6CCA\u5730\u4FEE\u7406`, endAt: t.endAt });
+            items.push({ title: `\u7B2C${t.slot}\u8266\u968A \u6CCA\u5730\u4FEE\u7406`, endAt: effectiveTime("akashi", t.endAt) });
           }
         }
       }

@@ -10,7 +10,7 @@ export function deliveryStyle(d) {
 }
 export function formatPlainText(d) {
   const t = d.item, lines = [`【${deliveryStyle(d).label}】${labels[t.kind]} ${t.slot ? '第' + t.slot + (['repair', 'build'].includes(t.kind) ? 'ドック' : '艦隊') : ''} ${t.name || ''}`.trim()];
-  const end = d.eventEndAt;
+  const end = d.dueAt || d.eventEndAt;
   if (d.type === 'correction') {
     lines.push(end ? '終了予定を更新しました' : 'この予定の通知は不要になりました');
   } else if (t.kind === 'akashi') {

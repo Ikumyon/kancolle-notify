@@ -19,28 +19,23 @@ export function reconcile(s, now) {
     const enabled = timer.kind === 'manual' || s.settings.categories[timer.kind];
     for (const d of Object.values(s.deliveries).filter(d => d.timerId === timer.id)) {
       if (['pending', 'sending'].includes(d.status) && (!enabled || !s.settings.providers[d.provider] || d.revision !== timer.revision ||
-        !timer.events.some(e => e.id === d.eventId) || d.type !== 'correction' && timer.state !== 'active')) d.status = 'cancelled';
+        !timer.events.some(e => e.id === d.eventId) || timer.state !== 'active')) d.status = 'cancelled';
     }
-    for (const event of timer.events) for (const provider of ['discord', 'telegram']) {
-      if (!enabled || !s.settings.providers[provider]) continue;
-      const jobs = Object.values(s.deliveries).filter(d => d.timerId === timer.id && d.eventId === event.id && d.provider === provider);
-      const sent = jobs.filter(d => d.status === 'sent');
-      const latest = sent.reduce((last, d) => !last || d.revision > last.revision ? d : last, null);
-      const isCancelled = timer.state === 'cancelled' || (timer.state === 'empty' && latest?.item?.state === 'active');
-      const isTimeChanged = latest && Number.isSafeInteger(event.endAt) && latest.eventEndAt !== event.endAt;
-      const corrected = isTimeChanged || isCancelled;
-      const make = (type, dueAt) => {
-        const id = `${event.id}:${timer.revision}:${type}:${provider}`;
+    if (timer.state === 'active') {
+      for (const event of timer.events) for (const provider of ['discord', 'telegram']) {
+        if (!enabled || !s.settings.providers[provider] || !Number.isSafeInteger(event.endAt)) continue;
+        const dueAt = event.endAt + (timer.kind === 'manual' ? 0 : s.settings.offsetSec * 1000);
+        if (dueAt <= now) continue;
+        const jobs = Object.values(s.deliveries).filter(d => d.timerId === timer.id && d.eventId === event.id && d.provider === provider);
+        const sent = jobs.filter(d => d.status === 'sent');
+        if (sent.some(d => d.type === 'notification' && (d.eventEndAt === event.endAt || d.revision === timer.revision))) continue;
+        const id = `${event.id}:${timer.revision}:notification:${provider}`;
         let d = s.deliveries[id];
         if (!d) d = s.deliveries[id] = { id, timerId: timer.id, eventId: event.id, revision: timer.revision,
-          provider, phase: event.phase, type, eventEndAt: event.endAt, text: event.text || null, item: structuredClone(timer),
+          provider, phase: event.phase, type: 'notification', eventEndAt: event.endAt, text: event.text || null, item: structuredClone(timer),
           status: 'pending', dueAt, nextTryAt: 0, leaseUntil: 0, attempts: 0, createdAt: now };
         if (d.status === 'cancelled') { d.status = 'pending'; d.leaseUntil = 0; }
         if (d.status === 'pending') { d.dueAt = dueAt; d.item = structuredClone(timer); d.text = event.text || null; }
-      };
-      if (corrected && timer.suppressedRevision !== timer.revision && !sent.some(d => d.revision === timer.revision)) make('correction', now);
-      if (timer.state === 'active' && Number.isSafeInteger(event.endAt) && !sent.some(d => d.type === 'notification' && d.eventEndAt === event.endAt)) {
-        make('notification', event.endAt + (timer.kind === 'manual' ? 0 : s.settings.offsetSec * 1000));
       }
     }
   }
