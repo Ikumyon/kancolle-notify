@@ -238,7 +238,19 @@ async function authenticate(request, env) {
 }
 
 // server/src/api/handlers/status.js
-var json = (data, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
+var CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Authorization, Content-Type",
+  "Access-Control-Max-Age": "86400"
+};
+var json = (data, status = 200) => Response.json(data, {
+  status,
+  headers: {
+    "Cache-Control": "no-store",
+    ...CORS_HEADERS
+  }
+});
 async function readBody(request, limit = 2097152) {
   const reader = request.body?.getReader();
   if (!reader) throw new Error("invalid_json");
@@ -926,6 +938,7 @@ var NotificationScheduler = class {
 var src_default = {
   async fetch(request, env) {
     try {
+      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
       if (new URL(request.url).pathname !== "/webhook/telegram" && !await authenticate(request, env)) return json({ error: "unauthorized" }, 401);
       if (!env.SCHEDULER) return json({ error: "scheduler_unavailable" }, 503);
       return await env.SCHEDULER.get(env.SCHEDULER.idFromName("owner")).fetch(request);
