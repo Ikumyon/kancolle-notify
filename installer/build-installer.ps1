@@ -4,6 +4,8 @@
 $ErrorActionPreference = "Stop"
 
 $isccPaths = @(
+    "C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
+    "C:\Program Files\Inno Setup 7\ISCC.exe",
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
     "C:\Program Files\Inno Setup 6\ISCC.exe",
     (Get-Command ISCC.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
@@ -12,8 +14,8 @@ $isccPaths = @(
 $iscc = $isccPaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 
 if (!$iscc) {
-    Write-Host "[ERROR] Inno Setup 6 (ISCC.exe) が見つかりませんでした。" -ForegroundColor Red
-    Write-Host "Inno Setup 6 をインストールするか、ISCC.exe にPATHを通してください。"
+    Write-Host "[ERROR] Inno Setup (ISCC.exe) が見つかりませんでした。" -ForegroundColor Red
+    Write-Host "Inno Setup をインストールするか、ISCC.exe にPATHを通してください。"
     Write-Host "公式サイト: https://jrsoftware.org/isdl.php"
     exit 1
 }

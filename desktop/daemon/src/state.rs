@@ -66,7 +66,7 @@ pub struct DaemonState {
 }
 
 pub fn get_state_path() -> PathBuf {
-    PathBuf::from("state.json")
+    crate::platform::get_base_dir().join("state.json")
 }
 
 pub fn load_state() -> DaemonState {

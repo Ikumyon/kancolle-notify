@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "kancolle-daemon"
-version = "0.9.3"
+version = "0.9.3-rc.0"
 dependencies = [
  "ctrlc",
  "libc",

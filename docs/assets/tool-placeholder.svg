@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Tool icon placeholder">
+  <rect width="512" height="512" rx="96" fill="#e8ebf0"/>
+  <g fill="none" stroke="#98a2b3" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M162 184h188M162 256h188M162 328h118"/>
+    <rect x="114" y="114" width="284" height="284" rx="48"/>
+  </g>
+</svg>

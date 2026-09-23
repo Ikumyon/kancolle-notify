@@ -1,6 +1,6 @@
 {
   "name": "kancolle-notify",
-  "version": "0.9.3-beta",
+  "version": "0.9.3-rc.0",
   "private": true,
   "license": "MIT",
   "type": "module",

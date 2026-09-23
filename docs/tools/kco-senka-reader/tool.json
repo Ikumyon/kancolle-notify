@@ -1,0 +1,9 @@
+{
+  "name": "KCO 通常戦果リーダー",
+  "description": "艦これの受信済み通信をDevTools APIで観測し、提督経験値差分から通常戦果の推計をKancolle Stream Overlayへ送る補助拡張。",
+  "github": "Ikumyon/KCO_senka_reader",
+  "detail": "detail.md",
+  "downloads": {
+    "chrome": "branch:main"
+  }
+}

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景サークル -->
+  <circle cx="32" cy="32" r="30" fill="url(#bg)"/>
+
+  <!-- ペンギンの体（黒/濃紺） -->
+  <ellipse cx="32" cy="36" rx="20" ry="21" fill="#1e293b"/>
+
+  <!-- 白いお腹・顔 -->
+  <ellipse cx="32" cy="38" rx="14" ry="16" fill="#ffffff"/>
+
+  <!-- 目 -->
+  <circle cx="26" cy="30" r="2.5" fill="#0f172a"/>
+  <circle cx="38" cy="30" r="2.5" fill="#0f172a"/>
+  <circle cx="27" cy="29" r="0.9" fill="#ffffff"/>
+  <circle cx="39" cy="29" r="0.9" fill="#ffffff"/>
+
+  <!-- くちばし（オレンジ） -->
+  <path d="M28 34 L36 34 L32 40 Z" fill="#f59e0b"/>
+
+  <!-- ほっぺ（ほんのりピンク） -->
+  <circle cx="23" cy="35" r="2" fill="#fda4af" opacity="0.8"/>
+  <circle cx="41" cy="35" r="2" fill="#fda4af" opacity="0.8"/>
+
+  <!-- 水兵帽（白＋青ライン） -->
+  <ellipse cx="32" cy="18" rx="11" ry="3.5" fill="#ffffff"/>
+  <path d="M23 18 Q32 10 41 18 Z" fill="#ffffff"/>
+  <path d="M24 17 Q32 14 40 17" stroke="#0284c7" stroke-width="1.8" fill="none"/>
+  <!-- 帽子リボン -->
+  <path d="M37 18 L43 23 L40 24 L36 19 Z" fill="#0284c7"/>
+</svg>

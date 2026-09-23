@@ -70,3 +70,11 @@ pub fn ensure_icons_dir() -> std::path::PathBuf {
 pub fn ensure_sounds_dir() -> std::path::PathBuf {
     imp::ensure_sounds_dir()
 }
+
+pub fn get_base_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+

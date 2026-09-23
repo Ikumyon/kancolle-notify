@@ -1,0 +1,16 @@
+{
+  "name": "kancolle-notify",
+  "description": "艦これの遠征・入渠・泊地修理・疲労回復を受動監視し、Cloudflare Workers とデスクトップ常駐通知で知らせる通知システム。",
+  "github": "Ikumyon/kancolle-notify",
+  "icon": "icon.webp",
+  "images": [
+    "pictures/extension-overview.webp",
+    "pictures/extension-settings.webp",
+    "pictures/desktop-dashboard.webp"
+  ],
+  "detail": "detail.md",
+  "downloads": {
+    "windows": "kancolle-notify-setup.exe",
+    "linux": "install.sh"
+  }
+}

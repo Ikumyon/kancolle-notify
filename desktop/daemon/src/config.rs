@@ -35,7 +35,7 @@ impl Default for Config {
 }
 
 pub fn get_config_path() -> PathBuf {
-    PathBuf::from("config.json")
+    crate::platform::get_base_dir().join("config.json")
 }
 
 pub fn load_config() -> Config {

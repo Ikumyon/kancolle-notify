@@ -1,0 +1,15 @@
+{
+  "name": "KCO Relay",
+  "description": "KCO title fetcher などから受け取ったBGMタイトル情報をローカルで中継し、配信オーバーレイへ届ける常駐ツール。",
+  "github": "Ikumyon/KCO-relay",
+  "icon": "icon.webp",
+  "detail": "detail.md",
+  "images": [
+    "pictures/main.webp",
+    "pictures/settings.webp"
+  ],
+  "downloads": {
+    "windows": "kco-relay-windows-x86_64.zip",
+    "linux": "kco-relay-linux-x86_64.tar.gz"
+  }
+}

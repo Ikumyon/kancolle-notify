@@ -66,7 +66,7 @@ class SseClientThread(QThread):
             url = f"{server_url}/api/events"
             headers = {
                 "Accept": "text/event-stream",
-                "User-Agent": "kancolle-gui/0.9.3"
+                "User-Agent": "kancolle-gui/0.9.3RC"
             }
             if token:
                 headers["Authorization"] = f"Bearer {token}"
@@ -297,7 +297,7 @@ class TimetableWindow(QWidget):
         self.check_local_daemon_status()
 
     def init_ui(self):
-        self.setWindowTitle("艦これ 通知管理 v0.9.3-beta")
+        self.setWindowTitle("艦これ 通知管理 v0.9.3RC")
         self.resize(850, 480)
         self.setMinimumSize(700, 360)
 

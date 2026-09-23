@@ -1,0 +1,16 @@
+{
+  "name": "Kancolle Stream Overlay",
+  "description": "タイマーや出撃情報を画面上に配置できる、艦これ配信向けの多機能ブラウザ拡張機能。",
+  "github": "Ikumyon/Kancolle-Stream-Overlay",
+  "icon": "pictures/icon.webp",
+  "detail": "detail.md",
+  "downloads": {
+    "chrome": "branch:main"
+  },
+  "images": [
+    "pictures/control.webp",
+    "pictures/information.webp",
+    "pictures/timer.webp",
+    "pictures/settings.webp"
+  ]
+}

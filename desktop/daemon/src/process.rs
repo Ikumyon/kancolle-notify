@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn get_pid_path() -> PathBuf {
-    PathBuf::from("daemon.pid")
+    crate::platform::get_base_dir().join("daemon.pid")
 }
 
 pub fn read_pid() -> Result<Option<u32>, String> {
