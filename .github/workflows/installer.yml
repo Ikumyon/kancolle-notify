@@ -1,11 +1,8 @@
 name: Build and Release (Windows & Linux)
 
 on:
-  push:
-    tags: ['*']
   release:
     types: [published]
-  # ブランチ指定は成果物の作成のみ。タグ指定ではそのタグへ公開する。
   workflow_dispatch:
 
 permissions:
