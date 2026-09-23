@@ -328,7 +328,7 @@ function renderGallery(images: string[], basePath: string): HTMLElement {
     </div>
   `;
 
-  // カルーセル機能のバインド
+    // カルーセル機能のバインド
   if (resolvedImages.length > 1) {
     let currentIndex = 0;
     const track = gallery.querySelector<HTMLElement>("#gallery-track");
@@ -350,14 +350,61 @@ function renderGallery(images: string[], basePath: string): HTMLElement {
       });
     };
 
-    prevBtn?.addEventListener("click", () => updateSlide(currentIndex - 1));
-    nextBtn?.addEventListener("click", () => updateSlide(currentIndex + 1));
+    // 自動スライド（オートプレイ）
+    const INTERVAL_MS = 4500;
+    let autoPlayTimer: number | null = null;
+    let isHovered = false;
+
+    const stopAutoPlay = () => {
+      if (autoPlayTimer !== null) {
+        window.clearInterval(autoPlayTimer);
+        autoPlayTimer = null;
+      }
+    };
+
+    const startAutoPlay = () => {
+      stopAutoPlay();
+      if (isHovered || document.hidden) return;
+      autoPlayTimer = window.setInterval(() => {
+        updateSlide(currentIndex + 1);
+      }, INTERVAL_MS);
+    };
+
+    gallery.addEventListener("mouseenter", () => {
+      isHovered = true;
+      stopAutoPlay();
+    });
+
+    gallery.addEventListener("mouseleave", () => {
+      isHovered = false;
+      startAutoPlay();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopAutoPlay();
+      } else {
+        startAutoPlay();
+      }
+    });
+
+    prevBtn?.addEventListener("click", () => {
+      updateSlide(currentIndex - 1);
+      startAutoPlay();
+    });
+    nextBtn?.addEventListener("click", () => {
+      updateSlide(currentIndex + 1);
+      startAutoPlay();
+    });
     thumbs.forEach((thumb) => {
       thumb.addEventListener("click", () => {
         const idx = Number(thumb.getAttribute("data-index"));
         updateSlide(idx);
+        startAutoPlay();
       });
     });
+
+    startAutoPlay();
   }
 
   return gallery;

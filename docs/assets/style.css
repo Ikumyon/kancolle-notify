@@ -355,7 +355,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   width: 100%;
   height: 100%;
   transform: translateX(0);
-  transition: transform .72s cubic-bezier(.18, .82, .25, 1);
+  transition: transform .72s cubic-bezier(0.36, 0, 0.15, 1);
   will-change: transform;
 }
 .gallery-main-slide {
