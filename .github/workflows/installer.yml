@@ -112,9 +112,8 @@ jobs:
         run: |
           mkdir -p release-pkg/kancolle-notify
           cp release-files/kancolle-daemon release-files/kancolle-gui release-pkg/kancolle-notify/
-          cp desktop/start-daemon.sh desktop/stop-daemon.sh desktop/start-gui.sh release-pkg/kancolle-notify/
           cp -r extension release-pkg/kancolle-notify/
-          chmod +x release-pkg/kancolle-notify/kancolle-daemon release-pkg/kancolle-notify/kancolle-gui release-pkg/kancolle-notify/*.sh
+          chmod +x release-pkg/kancolle-notify/kancolle-daemon release-pkg/kancolle-notify/kancolle-gui
           tar -czf release-files/kancolle-notify-linux-x64.tar.gz -C release-pkg kancolle-notify
           mv release-files/kancolle-daemon release-files/kancolle-daemon-linux
           mv release-files/kancolle-gui release-files/kancolle-gui-linux
