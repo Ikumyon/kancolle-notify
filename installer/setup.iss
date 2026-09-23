@@ -161,10 +161,6 @@ begin
   RefreshNotifyInputs;
 end;
 
-procedure ConfigPageActivate(Sender: TObject);
-begin
-  RefreshConfigPage;
-end;
 
 procedure NotifyTypeChanged(Sender: TObject);
 begin
@@ -269,7 +265,6 @@ begin
       '通知設定とCloudflare連携',
       '通知を受け取るための情報を入力してください。');
   end;
-  ConfigPage.OnActivate := @ConfigPageActivate;
 
   NoteLbl := TLabel.Create(WizardForm);
   NoteLbl.Parent := ConfigPage.Surface;
@@ -415,6 +410,12 @@ end;
 function ShouldCreateInstalledItems: Boolean;
 begin
   Result := True;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (ConfigPage <> nil) and (CurPageID = ConfigPage.ID) then
+    RefreshConfigPage;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
