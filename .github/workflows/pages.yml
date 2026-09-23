@@ -44,8 +44,8 @@ jobs:
 
       - name: Copy static files
         run: |
-          cp -r docs/tools docs/dist/tools
-          cp -r docs/assets docs/dist/assets
+          cp -r docs/tools docs/dist/
+          cp -r docs/assets/* docs/dist/assets/
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
